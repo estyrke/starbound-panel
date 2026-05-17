@@ -104,6 +104,11 @@
 .cardOn::before { background: var(--green); box-shadow: 0 0 12px var(--green); }
 .cardOn { border-color: rgba(0,255,136,0.2); }
 
+.cardDormant::before { background: var(--accent2); }
+.cardDormant { border-color: rgba(123,79,255,0.2); opacity: 0.85; }
+
+.cardFresh::before { background: var(--accent); opacity: 0.4; }
+
 .cardTop {
   display: flex;
   justify-content: space-between;
@@ -151,6 +156,7 @@
   border: 1px solid var(--border);
 }
 .stat { display: flex; flex-direction: column; gap: 0.2rem; }
+.statWide { grid-column: 1 / -1; }
 .statLabel {
   font-family: var(--font-mono);
   font-size: 0.6rem;

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import styles from "./App.module.css";
 
 const STATUS_COLOR = {
@@ -6,6 +6,7 @@ const STATUS_COLOR = {
   off: "var(--red)",
   stopping: "var(--yellow)",
   starting: "var(--yellow)",
+  initializing: "var(--yellow)",
   rebuilding: "var(--yellow)",
   migrating: "var(--yellow)",
   deleting: "var(--red)",
@@ -17,12 +18,15 @@ const STATUS_LABEL = {
   off: "OFFLINE",
   stopping: "STOPPING",
   starting: "STARTING",
+  initializing: "INITIALISERAR",
   rebuilding: "REBUILDING",
   migrating: "MIGRATING",
-  deleting: "DELETING",
+  deleting: "RADERAR",
 };
 
-function formatUptime(created) {
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+function formatAge(created) {
   if (!created) return "—";
   const diff = Math.floor((Date.now() - new Date(created)) / 1000);
   const h = Math.floor(diff / 3600);
@@ -30,58 +34,187 @@ function formatUptime(created) {
   return `${h}h ${m}m`;
 }
 
+function ts() {
+  return new Date().toLocaleTimeString("sv-SE");
+}
+
 export default function App() {
   const [servers, setServers] = useState([]);
+  const [snapshots, setSnapshots] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [actionState, setActionState] = useState({}); // { [serverId]: 'loading' | null }
+  // opState: { [serverName]: { phase: string, label: string } }
+  // Tracks in-progress multi-step operations so cards can show live status.
+  const [opState, setOpState] = useState({});
   const [log, setLog] = useState([]);
   const [tick, setTick] = useState(0);
 
-  const addLog = (msg, type = "info") => {
-    const ts = new Date().toLocaleTimeString("sv-SE");
-    setLog((prev) => [`[${ts}] ${msg}`, ...prev].slice(0, 50));
-  };
+  const addLog = useCallback((msg) => {
+    setLog((prev) => [`[${ts()}] ${msg}`, ...prev].slice(0, 50));
+  }, []);
 
-  const fetchServers = useCallback(async (silent = false) => {
+  const fetchAll = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
     try {
-      const r = await fetch("/api/servers");
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      const data = await r.json();
-      setServers(data.servers || []);
+      const [sRes, snapRes] = await Promise.all([
+        fetch("/api/servers"),
+        fetch("/api/snapshots"),
+      ]);
+      if (!sRes.ok) throw new Error(`HTTP ${sRes.status}`);
+      const sData = await sRes.json();
+      const snapData = snapRes.ok ? await snapRes.json() : { images: [] };
+      setServers(sData.servers || []);
+      setSnapshots(snapData.images || []);
       setError(null);
     } catch (e) {
       setError(e.message);
-      if (!silent) addLog(`Fel vid hämtning: ${e.message}`, "error");
+      if (!silent) addLog(`Fel vid hämtning: ${e.message}`);
     } finally {
       if (!silent) setLoading(false);
     }
-  }, []);
+  }, [addLog]);
 
   useEffect(() => {
-    fetchServers();
+    fetchAll();
     addLog("Panel ansluten – hämtar servrar…");
-  }, [fetchServers]);
+  }, [fetchAll]);
 
-  // Auto-refresh every 10s
   useEffect(() => {
     const interval = setInterval(() => {
       setTick((t) => t + 1);
-      fetchServers(true);
+      fetchAll(true);
     }, 10000);
     return () => clearInterval(interval);
-  }, [fetchServers]);
+  }, [fetchAll]);
 
-  const doAction = async (server, action) => {
-    const labels = {
-      poweron: "Startar",
-      poweroff: "Stänger av (hårt)",
-      shutdown: "Stänger av (mjukt)",
-      reboot: "Startar om",
-    };
-    setActionState((s) => ({ ...s, [server.id]: action }));
-    addLog(`${labels[action] || action} ${server.name}…`);
+  const setOp = (name, phase, label) =>
+    setOpState((s) => ({ ...s, [name]: { phase, label } }));
+  const clearOp = (name) =>
+    setOpState((s) => { const n = { ...s }; delete n[name]; return n; });
+
+  // Poll servers list until the given server reaches targetStatus (or is gone when targetStatus=null)
+  const waitForServerStatus = useCallback(async (serverId, targetStatus) => {
+    for (let i = 0; i < 90; i++) {
+      await sleep(4000);
+      const r = await fetch("/api/servers");
+      if (!r.ok) continue;
+      const { servers: list } = await r.json();
+      setServers(list || []);
+      const found = (list || []).find((s) => s.id === serverId);
+      if (targetStatus === null && !found) return null;
+      if (found?.status === targetStatus) return found;
+    }
+    throw new Error("Timeout: servern svarar inte");
+  }, []);
+
+  // Poll a Hetzner action until it succeeds or errors
+  const waitForAction = useCallback(async (actionId) => {
+    for (let i = 0; i < 90; i++) {
+      await sleep(4000);
+      const r = await fetch(`/api/poll-action?id=${actionId}`);
+      if (!r.ok) continue;
+      const data = await r.json();
+      if (data.action?.status === "success") return;
+      if (data.action?.status === "error")
+        throw new Error(data.action.error?.message || "Åtgärden misslyckades");
+    }
+    throw new Error("Timeout: åtgärden tog för lång tid");
+  }, []);
+
+  // Full stop flow: graceful shutdown → snapshot → delete
+  const doStop = useCallback(async (server) => {
+    const { name, id } = server;
+    addLog(`Sparar och stänger av ${name}…`);
+    try {
+      setOp(name, "stopping", "Stänger av…");
+      const r = await fetch("/api/action", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, action: "shutdown" }),
+      });
+      if (!r.ok) { const d = await r.json(); throw new Error(d.error || `HTTP ${r.status}`); }
+
+      await waitForServerStatus(id, "off");
+
+      setOp(name, "snapshotting", "Skapar snapshot…");
+      addLog(`${name}: av – skapar snapshot`);
+      const snapRes = await fetch("/api/snapshot", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ serverId: id }),
+      });
+      if (!snapRes.ok) { const d = await snapRes.json(); throw new Error(d.error || `HTTP ${snapRes.status}`); }
+      const snapData = await snapRes.json();
+      if (snapData.action?.id) await waitForAction(snapData.action.id);
+
+      setOp(name, "deleting", "Raderar server…");
+      addLog(`${name}: snapshot klar – raderar server`);
+      const delRes = await fetch("/api/delete-server", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ serverId: id }),
+      });
+      if (!delRes.ok) { const d = await delRes.json(); throw new Error(d.error || `HTTP ${delRes.status}`); }
+
+      addLog(`✓ ${name} sparad och stängd`);
+      await fetchAll(true);
+    } catch (e) {
+      addLog(`✗ ${name}: ${e.message}`);
+    } finally {
+      clearOp(name);
+    }
+  }, [addLog, fetchAll, waitForServerStatus, waitForAction]);
+
+  // Full start flow: create server from snapshot (or cloud-init for first launch)
+  const doStart = useCallback(async ({ name, serverType, location, snapshotId }) => {
+    addLog(snapshotId ? `Startar ${name} från snapshot…` : `Startar ${name} – installerar från grunden…`);
+    try {
+      setOp(name, "creating", "Skapar server…");
+      const r = await fetch("/api/create-server", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ snapshotId, name, serverType, location }),
+      });
+      if (!r.ok) { const d = await r.json(); throw new Error(d.error || `HTTP ${r.status}`); }
+      const data = await r.json();
+      const newId = data.server?.id;
+
+      setOp(name, "booting", "Väntar på start…");
+      addLog(`${name}: server skapad – väntar på start`);
+      let liveServer = null;
+      if (newId) liveServer = await waitForServerStatus(newId, "running");
+
+      const ip = liveServer?.public_net?.ipv4?.ip;
+      // Hetzner gives IPv6 as a network (e.g. "2a01:4f8::/64"); the server sits at ::1
+      const ipv6Network = liveServer?.public_net?.ipv6?.ip;
+      const ipv6 = ipv6Network ? ipv6Network.split("/")[0].replace(/::$/, "::1") : null;
+      if (ip || ipv6) {
+        setOp(name, "dns", "Uppdaterar DNS…");
+        addLog(`${name}: online (${ip ?? ipv6}) – uppdaterar DNS`);
+        const dnsRes = await fetch("/api/update-dns", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ip, ipv6 }),
+        });
+        const dnsData = await dnsRes.json();
+        if (dnsRes.ok) addLog(`✓ DNS uppdaterad: ${dnsData.record} A→${ip} AAAA→${ipv6}`);
+        else addLog(`⚠ DNS misslyckades: ${dnsData.error}`);
+      }
+
+      addLog(`✓ ${name} online`);
+      await fetchAll(true);
+    } catch (e) {
+      addLog(`✗ ${name}: ${e.message}`);
+    } finally {
+      clearOp(name);
+    }
+  }, [addLog, fetchAll, waitForServerStatus]);
+
+  // Simple single-step actions (reboot, poweron for manually-stopped servers)
+  const doAction = useCallback(async (server, action) => {
+    const label = action === "reboot" ? "Startar om" : "Startar";
+    setOp(server.name, action, `${label}…`);
+    addLog(`${label} ${server.name}…`);
     try {
       const r = await fetch("/api/action", {
         method: "POST",
@@ -90,21 +223,67 @@ export default function App() {
       });
       const data = await r.json();
       if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
-      addLog(`✓ ${labels[action]} ${server.name} – åtgärd startad`);
-      // Poll more aggressively for a bit
-      setTimeout(() => fetchServers(true), 2000);
-      setTimeout(() => fetchServers(true), 5000);
-      setTimeout(() => fetchServers(true), 10000);
+      addLog(`✓ ${label} ${server.name} – åtgärd startad`);
+      setTimeout(() => fetchAll(true), 2000);
+      setTimeout(() => fetchAll(true), 5000);
+      setTimeout(() => fetchAll(true), 10000);
     } catch (e) {
-      addLog(`✗ Fel: ${e.message}`, "error");
+      addLog(`✗ Fel: ${e.message}`);
     } finally {
-      setActionState((s) => ({ ...s, [server.id]: null }));
+      clearOp(server.name);
     }
-  };
+  }, [addLog, fetchAll]);
 
-  const status = (s) => s.status || "unknown";
-  const isOn = (s) => status(s) === "running";
-  const isBusy = (s) => actionState[s.id] || ["starting", "stopping", "rebuilding"].includes(status(s));
+  // Merge servers + snapshots into a unified entity list for rendering
+  const entities = useMemo(() => {
+    const liveByName = Object.fromEntries(servers.map((s) => [s.name, s]));
+
+    // Keep only the newest snapshot per server name
+    const latestSnap = {};
+    for (const snap of snapshots) {
+      const name = snap.labels?.["server-name"] || snap.description?.replace("starbound:", "") || "unknown";
+      const existing = latestSnap[name];
+      if (!existing || new Date(snap.created) > new Date(existing.snap.created)) {
+        latestSnap[name] = { snap, name };
+      }
+    }
+
+    const result = [];
+
+    for (const server of servers) {
+      result.push({
+        type: "live",
+        key: `live-${server.id}`,
+        server,
+        snapshot: latestSnap[server.name]?.snap ?? null,
+        name: server.name,
+      });
+    }
+
+    for (const { name, snap } of Object.values(latestSnap)) {
+      if (!liveByName[name] && !opState[name]) {
+        result.push({
+          type: "dormant",
+          key: `dormant-${snap.id}`,
+          snapshot: snap,
+          name,
+          serverType: snap.labels?.["server-type"],
+          location: snap.labels?.location,
+        });
+      }
+    }
+
+    // Show a placeholder card for names that are mid-operation but not yet in either list
+    for (const [name, op] of Object.entries(opState)) {
+      if (!liveByName[name] && !latestSnap[name]) {
+        result.push({ type: "pending", key: `pending-${name}`, name, op });
+      }
+    }
+
+    return result;
+  }, [servers, snapshots, opState]);
+
+  const showFresh = !loading && entities.length === 0;
 
   return (
     <div className={styles.layout}>
@@ -114,92 +293,62 @@ export default function App() {
           <span>STARBOUND</span>
           <span className={styles.logoDim}>CONTROL</span>
         </div>
-        <button className={styles.refreshBtn} onClick={() => fetchServers()} disabled={loading}>
+        <button className={styles.refreshBtn} onClick={() => fetchAll()} disabled={loading}>
           {loading ? "↻ LADDAR…" : "↻ UPPDATERA"}
         </button>
       </header>
 
       <main className={styles.main}>
-        {error && (
-          <div className={styles.errorBanner}>
-            ⚠ {error}
-          </div>
-        )}
+        {error && <div className={styles.errorBanner}>⚠ {error}</div>}
 
         <div className={styles.serverGrid}>
-          {loading && servers.length === 0 ? (
+          {loading && entities.length === 0 ? (
             <div className={styles.emptyState}>
               <div className={styles.spinner} />
               <p>Ansluter till Hetzner Cloud…</p>
             </div>
-          ) : servers.length === 0 ? (
-            <div className={styles.emptyState}>
-              <p className={styles.emptyIcon}>◎</p>
-              <p>Inga servrar hittades i projektet.</p>
-            </div>
+          ) : showFresh ? (
+            <FreshCard onStart={() => doStart({ name: "starbound" })} />
           ) : (
-            servers.map((server) => (
-              <div key={server.id} className={`${styles.card} ${isOn(server) ? styles.cardOn : ""}`}>
-                <div className={styles.cardTop}>
-                  <div>
-                    <div className={styles.serverName}>{server.name}</div>
-                    <div className={styles.serverMeta}>
-                      {server.server_type?.name} · {server.datacenter?.location?.name?.toUpperCase() || "—"}
-                    </div>
-                  </div>
-                  <div className={styles.statusBadge} style={{ color: STATUS_COLOR[status(server)] }}>
-                    <span className={styles.statusDot} style={{ background: STATUS_COLOR[status(server)] }} />
-                    {STATUS_LABEL[status(server)] || status(server).toUpperCase()}
-                  </div>
-                </div>
-
-                <div className={styles.cardStats}>
-                  <Stat label="IP" value={server.public_net?.ipv4?.ip || "—"} mono />
-                  <Stat label="CPU" value={`${server.server_type?.cores || "—"} vCPU`} />
-                  <Stat label="RAM" value={`${server.server_type?.memory || "—"} GB`} />
-                  <Stat label="PORT" value="21025" mono />
-                </div>
-
-                <div className={styles.cardActions}>
-                  {isOn(server) ? (
-                    <>
-                      <ActionBtn
-                        label="STÄNG AV"
-                        icon="⏻"
-                        color="var(--red)"
-                        onClick={() => doAction(server, "shutdown")}
-                        disabled={isBusy(server)}
-                        loading={actionState[server.id] === "shutdown"}
-                      />
-                      <ActionBtn
-                        label="STARTA OM"
-                        icon="↺"
-                        color="var(--yellow)"
-                        onClick={() => doAction(server, "reboot")}
-                        disabled={isBusy(server)}
-                        loading={actionState[server.id] === "reboot"}
-                      />
-                    </>
-                  ) : (
-                    <ActionBtn
-                      label="STARTA"
-                      icon="▶"
-                      color="var(--green)"
-                      onClick={() => doAction(server, "poweron")}
-                      disabled={isBusy(server)}
-                      loading={actionState[server.id] === "poweron"}
-                      wide
-                    />
-                  )}
-                </div>
-
-                {isBusy(server) && (
-                  <div className={styles.busyBar}>
-                    <div className={styles.busyBarFill} />
-                  </div>
-                )}
-              </div>
-            ))
+            entities.map((entity) => {
+              if (entity.type === "live") {
+                const { server, name } = entity;
+                const op = opState[name];
+                const isBusy = !!op || ["starting", "stopping", "rebuilding"].includes(server.status);
+                return (
+                  <LiveCard
+                    key={entity.key}
+                    server={server}
+                    op={op}
+                    isBusy={isBusy}
+                    onStop={() => doStop(server)}
+                    onReboot={() => doAction(server, "reboot")}
+                    onPowerOn={() => doAction(server, "poweron")}
+                  />
+                );
+              }
+              if (entity.type === "dormant") {
+                return (
+                  <DormantCard
+                    key={entity.key}
+                    name={entity.name}
+                    serverType={entity.serverType}
+                    location={entity.location}
+                    snapshot={entity.snapshot}
+                    onStart={() => doStart({
+                      name: entity.name,
+                      serverType: entity.serverType,
+                      location: entity.location,
+                      snapshotId: entity.snapshot.id,
+                    })}
+                  />
+                );
+              }
+              if (entity.type === "pending") {
+                return <PendingCard key={entity.key} name={entity.name} op={entity.op} />;
+              }
+              return null;
+            })
           )}
         </div>
 
@@ -228,11 +377,172 @@ export default function App() {
   );
 }
 
+// ── Card components ──────────────────────────────────────────────────────────
+
+function LiveCard({ server, op, isBusy, onStop, onReboot, onPowerOn }) {
+  const isOn = server.status === "running";
+  const statusColor = op ? "var(--yellow)" : (STATUS_COLOR[server.status] || "var(--text-dim)");
+  const statusLabel = op ? op.label.toUpperCase() : (STATUS_LABEL[server.status] || server.status.toUpperCase());
+
+  return (
+    <div className={`${styles.card} ${isOn && !op ? styles.cardOn : ""}`}>
+      <div className={styles.cardTop}>
+        <div>
+          <div className={styles.serverName}>{server.name}</div>
+          <div className={styles.serverMeta}>
+            {server.server_type?.name} · {server.datacenter?.location?.name?.toUpperCase() || "—"}
+          </div>
+        </div>
+        <div className={styles.statusBadge} style={{ color: statusColor }}>
+          <span className={styles.statusDot} style={{ background: statusColor }} />
+          {statusLabel}
+        </div>
+      </div>
+
+      <div className={styles.cardStats}>
+        <Stat label="IP" value={server.public_net?.ipv4?.ip || "—"} mono />
+        <Stat label="CPU" value={`${server.server_type?.cores || "—"} vCPU`} />
+        <Stat label="RAM" value={`${server.server_type?.memory || "—"} GB`} />
+        <Stat label="PORT" value="21025" mono />
+      </div>
+
+      <div className={styles.cardActions}>
+        {isOn ? (
+          <>
+            <ActionBtn
+              label="SPARA & STÄNG"
+              icon="⏻"
+              color="var(--red)"
+              onClick={onStop}
+              disabled={isBusy}
+              loading={!!op && op.phase !== "reboot"}
+            />
+            <ActionBtn
+              label="STARTA OM"
+              icon="↺"
+              color="var(--yellow)"
+              onClick={onReboot}
+              disabled={isBusy}
+              loading={op?.phase === "reboot"}
+            />
+          </>
+        ) : (
+          <ActionBtn
+            label="STARTA"
+            icon="▶"
+            color="var(--green)"
+            onClick={onPowerOn}
+            disabled={isBusy}
+            loading={op?.phase === "poweron"}
+            wide
+          />
+        )}
+      </div>
+
+      {isBusy && <BusyBar />}
+    </div>
+  );
+}
+
+function DormantCard({ name, serverType, location, snapshot, onStart }) {
+  return (
+    <div className={`${styles.card} ${styles.cardDormant}`}>
+      <div className={styles.cardTop}>
+        <div>
+          <div className={styles.serverName}>{name}</div>
+          <div className={styles.serverMeta}>
+            {serverType || "—"} · {location?.toUpperCase() || "—"}
+          </div>
+        </div>
+        <div className={styles.statusBadge} style={{ color: "var(--accent2)" }}>
+          <span className={styles.statusDot} style={{ background: "var(--accent2)" }} />
+          SOVANDE
+        </div>
+      </div>
+
+      <div className={styles.cardStats}>
+        <Stat label="IP" value="—" mono />
+        <Stat label="CPU" value="—" />
+        <Stat label="RAM" value="—" />
+        <Stat label="SNAPSHOT" value={snapshot ? formatAge(snapshot.created) : "—"} />
+      </div>
+
+      <div className={styles.cardActions}>
+        <ActionBtn label="STARTA" icon="▶" color="var(--green)" onClick={onStart} wide />
+      </div>
+    </div>
+  );
+}
+
+function PendingCard({ name, op }) {
+  return (
+    <div className={styles.card}>
+      <div className={styles.cardTop}>
+        <div>
+          <div className={styles.serverName}>{name}</div>
+          <div className={styles.serverMeta}>—</div>
+        </div>
+        <div className={styles.statusBadge} style={{ color: "var(--yellow)" }}>
+          <span className={styles.statusDot} style={{ background: "var(--yellow)" }} />
+          {op?.label?.toUpperCase() || "STARTAR…"}
+        </div>
+      </div>
+
+      <div className={styles.cardStats}>
+        <Stat label="IP" value="—" mono />
+        <Stat label="CPU" value="—" />
+        <Stat label="RAM" value="—" />
+        <Stat label="PORT" value="21025" mono />
+      </div>
+
+      <div className={styles.cardActions}>
+        <ActionBtn label={op?.label || "STARTAR…"} icon="…" color="var(--yellow)" disabled wide />
+      </div>
+
+      <BusyBar />
+    </div>
+  );
+}
+
+function FreshCard({ onStart }) {
+  return (
+    <div className={`${styles.card} ${styles.cardFresh}`}>
+      <div className={styles.cardTop}>
+        <div>
+          <div className={styles.serverName}>starbound</div>
+          <div className={styles.serverMeta}>Ingen server eller snapshot hittades</div>
+        </div>
+        <div className={styles.statusBadge} style={{ color: "var(--text-dim)" }}>
+          <span className={styles.statusDot} style={{ background: "var(--text-dim)" }} />
+          INAKTIV
+        </div>
+      </div>
+
+      <div className={styles.cardStats}>
+        <div className={`${styles.stat} ${styles.statWide}`}>
+          <span className={styles.statLabel}>INFO</span>
+          <span className={styles.statValue}>
+            Startar en ny server och installerar Starbound via SteamCMD (kräver STEAM_USER + STEAM_PASS)
+          </span>
+        </div>
+      </div>
+
+      <div className={styles.cardActions}>
+        <ActionBtn label="NYTT SPEL" icon="◆" color="var(--accent)" onClick={onStart} wide />
+      </div>
+    </div>
+  );
+}
+
+// ── Shared primitives ─────────────────────────────────────────────────────────
+
 function Stat({ label, value, mono }) {
   return (
     <div className={styles.stat}>
       <span className={styles.statLabel}>{label}</span>
-      <span className={styles.statValue} style={mono ? { fontFamily: "var(--font-mono)" } : {}}>{value}</span>
+      <span className={styles.statValue} style={mono ? { fontFamily: "var(--font-mono)" } : {}}>
+        {value}
+      </span>
     </div>
   );
 }
@@ -248,5 +558,13 @@ function ActionBtn({ label, icon, color, onClick, disabled, loading, wide }) {
       <span className={styles.actionIcon}>{loading ? "…" : icon}</span>
       {label}
     </button>
+  );
+}
+
+function BusyBar() {
+  return (
+    <div className={styles.busyBar}>
+      <div className={styles.busyBarFill} />
+    </div>
   );
 }

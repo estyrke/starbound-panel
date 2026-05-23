@@ -1,6 +1,17 @@
+import { tanstackStart } from "@tanstack/react-start/plugin/vite";
+import viteReact from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
-import react from "@vitejs/plugin-react";
 
 export default defineConfig({
-  plugins: [react()],
+  server: {
+    port: 3000,
+  },
+  resolve: {
+    tsconfigPaths: true,
+  },
+  plugins: [
+    tanstackStart(),
+    // react's vite plugin must come after start's vite plugin
+    viteReact(),
+  ],
 });

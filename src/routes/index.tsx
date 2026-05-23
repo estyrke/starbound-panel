@@ -1,5 +1,6 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
-import styles from "./App.module.css";
+import { createFileRoute } from "@tanstack/react-router";
+import { useState, useCallback, useMemo } from "react";
+import styles from "../styles/App.module.css";
 import type {
   HetznerServer,
   HetznerImage,
@@ -9,7 +10,18 @@ import type {
   LiveEntity,
   DormantEntity,
   PendingEntity,
-} from "./types.js";
+} from "../lib/types.js";
+import {
+  sendAction,
+  createServer,
+  deleteServer,
+  takeSnapshot,
+  serversQueryOptions,
+  snapshotsQueryOptions,
+  actionQueryOptions,
+} from "../lib/hetzner.functions.js";
+import { updateDns } from "../lib/gandi.functions.js";
+import { QueryObserver, useSuspenseQueries, useQueryClient } from "@tanstack/react-query";
 
 const STATUS_COLOR: Record<string, string> = {
   running: "var(--green)",
@@ -26,11 +38,11 @@ const STATUS_COLOR: Record<string, string> = {
 const STATUS_LABEL: Record<string, string> = {
   running: "ONLINE",
   off: "OFFLINE",
-  stopping: "STOPPING",
-  starting: "STARTING",
+  stopping: "STOPPAR",
+  starting: "STARTAR",
   initializing: "INITIALISERAR",
-  rebuilding: "REBUILDING",
-  migrating: "MIGRATING",
+  rebuilding: "BYGGER OM",
+  migrating: "MIGRAERAR",
   deleting: "RADERAR",
 };
 
@@ -47,57 +59,35 @@ function ts(): string {
   return new Date().toLocaleTimeString("sv-SE");
 }
 
-export default function App() {
-  const [servers, setServers] = useState<HetznerServer[]>([]);
-  const [snapshots, setSnapshots] = useState<HetznerImage[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+export const Route = createFileRoute("/")({
+  loader: async ({ context }) => {
+    await Promise.all([
+      context.queryClient.ensureQueryData(serversQueryOptions()),
+      context.queryClient.ensureQueryData(snapshotsQueryOptions()),
+    ]);
+  },
+  component: App,
+});
+
+function App() {
+  const { servers, snapshots, isLoading, error } = useSuspenseQueries({
+    queries: [serversQueryOptions(), snapshotsQueryOptions()],
+    combine: ([serverData, snapshotData]) => ({
+      servers: serverData.data,
+      snapshots: snapshotData.data,
+      isLoading: serverData.isLoading || snapshotData.isLoading,
+      error: serverData.error ?? snapshotData.error,
+    }),
+  });
+
+  const queryClient = useQueryClient();
   // opState: tracks in-progress multi-step operations so cards can show live status
   const [opState, setOpState] = useState<Record<string, OpState>>({});
-  const [log, setLog] = useState<string[]>([]);
-  const [tick, setTick] = useState(0);
+  const [log, setLog] = useState<string[]>(() => [`[${ts()}] Panel ansluten – hämtar servrar…`]);
 
   const addLog = useCallback((msg: string) => {
     setLog((prev) => [`[${ts()}] ${msg}`, ...prev].slice(0, 50));
   }, []);
-
-  const fetchAll = useCallback(
-    async (silent = false) => {
-      if (!silent) setLoading(true);
-      try {
-        const [sRes, snapRes] = await Promise.all([
-          fetch("/api/servers"),
-          fetch("/api/snapshots"),
-        ]);
-        if (!sRes.ok) throw new Error(`HTTP ${sRes.status}`);
-        const sData = await sRes.json();
-        const snapData = snapRes.ok ? await snapRes.json() : { images: [] };
-        setServers(sData.servers ?? []);
-        setSnapshots(snapData.images ?? []);
-        setError(null);
-      } catch (e) {
-        const msg = (e as Error).message;
-        setError(msg);
-        if (!silent) addLog(`Fel vid hämtning: ${msg}`);
-      } finally {
-        if (!silent) setLoading(false);
-      }
-    },
-    [addLog]
-  );
-
-  useEffect(() => {
-    fetchAll();
-    addLog("Panel ansluten – hämtar servrar…");
-  }, [fetchAll]);
-
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setTick((t) => t + 1);
-      fetchAll(true);
-    }, 10000);
-    return () => clearInterval(interval);
-  }, [fetchAll]);
 
   const setOp = (name: string, phase: string, label: string) =>
     setOpState((s) => ({ ...s, [name]: { phase, label } }));
@@ -113,32 +103,54 @@ export default function App() {
     async (serverId: number, targetStatus: string | null): Promise<HetznerServer | null> => {
       for (let i = 0; i < 90; i++) {
         await sleep(4000);
-        const r = await fetch("/api/servers");
-        if (!r.ok) continue;
-        const { servers: list } = (await r.json()) as { servers: HetznerServer[] };
-        setServers(list ?? []);
-        const found = list?.find((s) => s.id === serverId) ?? null;
+        const servers = await queryClient.fetchQuery(serversQueryOptions());
+        const found = servers.find((s) => s.id === serverId) ?? null;
         if (targetStatus === null && !found) return null;
         if (found?.status === targetStatus) return found;
       }
       throw new Error("Timeout: servern svarar inte");
     },
-    []
+    [queryClient]
   );
 
   // Polls a Hetzner action until it succeeds or errors
-  const waitForAction = useCallback(async (actionId: number): Promise<void> => {
-    for (let i = 0; i < 90; i++) {
-      await sleep(4000);
-      const r = await fetch(`/api/poll-action?id=${actionId}`);
-      if (!r.ok) continue;
-      const data = await r.json();
-      if (data.action?.status === "success") return;
-      if (data.action?.status === "error")
-        throw new Error(data.action.error?.message ?? "Åtgärden misslyckades");
-    }
-    throw new Error("Timeout: åtgärden tog för lång tid");
-  }, []);
+  const waitForAction = useCallback(
+    async (actionId: number): Promise<void> => {
+      const observer = new QueryObserver(queryClient, {
+        ...actionQueryOptions(actionId),
+        refetchInterval: 4000,
+        refetchOnWindowFocus: false,
+      });
+
+      return new Promise<void>((resolve, reject) => {
+        const unsubscribe = observer.subscribe((result) => {
+          if (result.isError) {
+            unsubscribe();
+            reject(result.error as Error);
+            return;
+          }
+
+          const action = result.data?.action;
+          if (action?.status === "success") {
+            unsubscribe();
+            resolve();
+            return;
+          }
+
+          if (action?.status === "error") {
+            unsubscribe();
+            reject(new Error(action.error?.message ?? "Åtgärden misslyckades"));
+          }
+        });
+
+        observer.fetchOptimistic(actionQueryOptions(actionId)).catch((err) => {
+          unsubscribe();
+          reject(err as Error);
+        });
+      });
+    },
+    [queryClient]
+  );
 
   // Full stop flow: graceful shutdown → snapshot → delete
   const doStop = useCallback(
@@ -147,73 +159,50 @@ export default function App() {
       addLog(`Sparar och stänger av ${name}…`);
       try {
         setOp(name, "stopping", "Stänger av…");
-        const r = await fetch("/api/action", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ id, action: "shutdown" }),
+
+        await sendAction({
+          data: {
+            id,
+            action: "shutdown",
+          },
         });
-        if (!r.ok) {
-          const d = await r.json();
-          throw new Error((d as { error?: string }).error ?? `HTTP ${r.status}`);
-        }
+
         await waitForServerStatus(id, "off");
 
         setOp(name, "snapshotting", "Skapar snapshot…");
         addLog(`${name}: av – skapar snapshot`);
-        const snapRes = await fetch("/api/snapshot", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ serverId: id }),
-        });
-        if (!snapRes.ok) {
-          const d = await snapRes.json();
-          throw new Error((d as { error?: string }).error ?? `HTTP ${snapRes.status}`);
-        }
-        const snapData = await snapRes.json();
-        if (snapData.action?.id) await waitForAction(snapData.action.id as number);
+        const snapData = await takeSnapshot({ data: { serverId: id } });
+
+        await waitForAction(snapData.action.id);
+        queryClient.invalidateQueries({ queryKey: ["snapshots"] });
 
         setOp(name, "deleting", "Raderar server…");
         addLog(`${name}: snapshot klar – raderar server`);
-        const delRes = await fetch("/api/delete-server", {
-          method: "DELETE",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ serverId: id }),
-        });
-        if (!delRes.ok) {
-          const d = await delRes.json();
-          throw new Error((d as { error?: string }).error ?? `HTTP ${delRes.status}`);
-        }
-
+        const delRes = await deleteServer({ data: { serverId: id } });
+        if (!delRes.success) throw new Error("Misslyckades med att radera servern");
         addLog(`✓ ${name} sparad och stängd`);
-        await fetchAll(true);
+        queryClient.invalidateQueries({ queryKey: ["servers"] });
       } catch (e) {
         addLog(`✗ ${name}: ${(e as Error).message}`);
       } finally {
         clearOp(name);
       }
     },
-    [addLog, fetchAll, waitForServerStatus, waitForAction]
+    [addLog, waitForServerStatus, waitForAction, queryClient]
   );
 
   // Full start flow: create server from snapshot (or cloud-init for first launch)
   const doStart = useCallback(
     async ({ name, serverType, location, snapshotId }: StartParams) => {
       addLog(
-        snapshotId ? `Startar ${name} från snapshot…` : `Startar ${name} – installerar från grunden…`
+        snapshotId
+          ? `Startar ${name} från snapshot…`
+          : `Startar ${name} – installerar från grunden…`
       );
       try {
         setOp(name, "creating", "Skapar server…");
-        const r = await fetch("/api/create-server", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ snapshotId, name, serverType, location }),
-        });
-        if (!r.ok) {
-          const d = await r.json();
-          throw new Error((d as { error?: string }).error ?? `HTTP ${r.status}`);
-        }
-        const data = await r.json();
-        const newId = (data.server as HetznerServer | undefined)?.id;
+        const data = await createServer({ data: { snapshotId, name, serverType, location } });
+        const newId = data.server.id;
 
         setOp(name, "booting", "Väntar på start…");
         addLog(`${name}: server skapad – väntar på start`);
@@ -225,31 +214,28 @@ export default function App() {
         const ipv6Network = liveServer?.public_net.ipv6?.ip;
         const ipv6 = ipv6Network ? ipv6Network.split("/")[0].replace(/::$/, "::1") : null;
 
-        if (ip ?? ipv6) {
+        if (ip && ipv6) {
           setOp(name, "dns", "Uppdaterar DNS…");
           addLog(`${name}: online (${ip ?? ipv6}) – uppdaterar DNS`);
-          const dnsRes = await fetch("/api/update-dns", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ ip, ipv6 }),
-          });
-          const dnsData = await dnsRes.json();
-          if (dnsRes.ok)
+          try {
+            const dnsData = await updateDns({ data: { ip, ipv6 } });
             addLog(
               `✓ DNS uppdaterad: ${(dnsData as { record: string }).record} A→${ip} AAAA→${ipv6}`
             );
-          else addLog(`⚠ DNS misslyckades: ${(dnsData as { error: string }).error}`);
+          } catch (e) {
+            addLog(`✗ DNS misslyckades: ${(e as Error).message}`);
+          }
         }
 
         addLog(`✓ ${name} online`);
-        await fetchAll(true);
+        queryClient.invalidateQueries({ queryKey: ["servers"] });
       } catch (e) {
         addLog(`✗ ${name}: ${(e as Error).message}`);
       } finally {
         clearOp(name);
       }
     },
-    [addLog, fetchAll, waitForServerStatus]
+    [addLog, queryClient, waitForServerStatus]
   );
 
   // Simple single-step actions (reboot, poweron for manually-stopped servers)
@@ -259,24 +245,15 @@ export default function App() {
       setOp(server.name, action, `${label}…`);
       addLog(`${label} ${server.name}…`);
       try {
-        const r = await fetch("/api/action", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ id: server.id, action }),
-        });
-        const data = await r.json();
-        if (!r.ok) throw new Error((data as { error?: string }).error ?? `HTTP ${r.status}`);
+        await sendAction({ data: { id: server.id, action } });
         addLog(`✓ ${label} ${server.name} – åtgärd startad`);
-        setTimeout(() => fetchAll(true), 2000);
-        setTimeout(() => fetchAll(true), 5000);
-        setTimeout(() => fetchAll(true), 10000);
       } catch (e) {
         addLog(`✗ Fel: ${(e as Error).message}`);
       } finally {
         clearOp(server.name);
       }
     },
-    [addLog, fetchAll]
+    [addLog]
   );
 
   // Merge servers + snapshots into a unified entity list for rendering
@@ -321,7 +298,7 @@ export default function App() {
 
     // Show a placeholder card for names that are mid-operation but not yet in either list
     for (const [name, op] of Object.entries(opState)) {
-      if (!liveByName[name] && !latestSnap[name]) {
+      if (!liveByName[name]) {
         result.push({ type: "pending", key: `pending-${name}`, name, op });
       }
     }
@@ -329,7 +306,7 @@ export default function App() {
     return result;
   }, [servers, snapshots, opState]);
 
-  const showFresh = !loading && entities.length === 0;
+  const showFresh = !isLoading && entities.length === 0;
 
   return (
     <div className={styles.layout}>
@@ -339,16 +316,20 @@ export default function App() {
           <span>STARBOUND</span>
           <span className={styles.logoDim}>CONTROL</span>
         </div>
-        <button className={styles.refreshBtn} onClick={() => fetchAll()} disabled={loading}>
-          {loading ? "↻ LADDAR…" : "↻ UPPDATERA"}
+        <button
+          className={styles.refreshBtn}
+          onClick={() => queryClient.refetchQueries()}
+          disabled={isLoading}
+        >
+          {isLoading ? "↻ LADDAR…" : "↻ UPPDATERA"}
         </button>
       </header>
 
       <main className={styles.main}>
-        {error && <div className={styles.errorBanner}>⚠ {error}</div>}
+        {error && <div className={styles.errorBanner}>⚠ {error.message}</div>}
 
         <div className={styles.serverGrid}>
-          {loading && entities.length === 0 ? (
+          {isLoading && entities.length === 0 ? (
             <div className={styles.emptyState}>
               <div className={styles.spinner} />
               <p>Ansluter till Hetzner Cloud…</p>
@@ -409,8 +390,8 @@ export default function App() {
             {log.length === 0 ? (
               <span className={styles.logDim}>Inga händelser ännu.</span>
             ) : (
-              log.map((entry, i) => (
-                <div key={i} className={styles.logEntry}>
+              log.map((entry) => (
+                <div key={entry} className={styles.logEntry}>
                   {entry}
                 </div>
               ))
@@ -424,7 +405,6 @@ export default function App() {
         <span className={styles.footerDot}>·</span>
         <span>Auto-uppdatering var 10s</span>
         <span className={styles.footerDot}>·</span>
-        <span className={styles.footerTick}>TICK {tick}</span>
       </footer>
     </div>
   );
@@ -536,7 +516,11 @@ function DormantCard({ name, serverType, location, snapshot, onStart }: DormantC
         <Stat label="IP" value="—" mono />
         <Stat label="CPU" value="—" />
         <Stat label="RAM" value="—" />
-        <Stat label="SNAPSHOT" value={formatAge(snapshot.created)} />
+        <Stat
+          label="SNAPSHOT"
+          value={formatAge(snapshot.created)}
+          title={`Snapshot ID: ${snapshot.id}`}
+        />
       </div>
 
       <div className={styles.cardActions}>
@@ -618,11 +602,12 @@ interface StatProps {
   label: string;
   value: string;
   mono?: boolean;
+  title?: string;
 }
 
-function Stat({ label, value, mono }: StatProps) {
+function Stat({ label, value, mono, title }: StatProps) {
   return (
-    <div className={styles.stat}>
+    <div className={styles.stat} title={title}>
       <span className={styles.statLabel}>{label}</span>
       <span
         className={styles.statValue}

@@ -5,7 +5,6 @@ import type {
   HetznerServer,
   HetznerImage,
   OpState,
-  StartParams,
   Entity,
   LiveEntity,
   DormantEntity,
@@ -13,15 +12,11 @@ import type {
 } from "../lib/types.js";
 import {
   sendAction,
-  createServer,
-  deleteServer,
-  takeSnapshot,
-  serversQueryOptions,
-  snapshotsQueryOptions,
-  actionQueryOptions,
-} from "../lib/hetzner.functions.js";
-import { updateDns } from "../lib/gandi.functions.js";
-import { QueryObserver, useSuspenseQueries, useQueryClient } from "@tanstack/react-query";
+  listAllQueryOptions,
+  startServer,
+  stopServer,
+} from "../lib/api.functions.js";
+import { useSuspenseQuery, useQueryClient } from "@tanstack/react-query";
 
 const STATUS_COLOR: Record<string, string> = {
   running: "var(--green)",
@@ -46,8 +41,6 @@ const STATUS_LABEL: Record<string, string> = {
   deleting: "RADERAR",
 };
 
-const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
-
 function formatAge(created: string): string {
   const diff = Math.floor((Date.now() - new Date(created).getTime()) / 1000);
   const h = Math.floor(diff / 3600);
@@ -61,24 +54,15 @@ function ts(): string {
 
 export const Route = createFileRoute("/")({
   loader: async ({ context }) => {
-    await Promise.all([
-      context.queryClient.ensureQueryData(serversQueryOptions()),
-      context.queryClient.ensureQueryData(snapshotsQueryOptions()),
-    ]);
+    await context.queryClient.ensureQueryData(listAllQueryOptions());
   },
   component: App,
 });
 
 function App() {
-  const { servers, snapshots, isLoading, error } = useSuspenseQueries({
-    queries: [serversQueryOptions(), snapshotsQueryOptions()],
-    combine: ([serverData, snapshotData]) => ({
-      servers: serverData.data,
-      snapshots: snapshotData.data,
-      isLoading: serverData.isLoading || snapshotData.isLoading,
-      error: serverData.error ?? snapshotData.error,
-    }),
-  });
+  const { data, isLoading, error } = useSuspenseQuery(listAllQueryOptions());
+  const servers = data?.servers ?? [];
+  const dormantServers = data?.dormant ?? [];
 
   const queryClient = useQueryClient();
   // opState: tracks in-progress multi-step operations so cards can show live status
@@ -98,144 +82,59 @@ function App() {
       return next;
     });
 
-  // Polls servers list until the given server reaches targetStatus (or is gone when null)
-  const waitForServerStatus = useCallback(
-    async (serverId: number, targetStatus: string | null): Promise<HetznerServer | null> => {
-      for (let i = 0; i < 90; i++) {
-        await sleep(4000);
-        const servers = await queryClient.fetchQuery(serversQueryOptions());
-        const found = servers.find((s) => s.id === serverId) ?? null;
-        if (targetStatus === null && !found) return null;
-        if (found?.status === targetStatus) return found;
-      }
-      throw new Error("Timeout: servern svarar inte");
-    },
-    [queryClient]
-  );
-
-  // Polls a Hetzner action until it succeeds or errors
-  const waitForAction = useCallback(
-    async (actionId: number): Promise<void> => {
-      const observer = new QueryObserver(queryClient, {
-        ...actionQueryOptions(actionId),
-        refetchInterval: 4000,
-        refetchOnWindowFocus: false,
-      });
-
-      return new Promise<void>((resolve, reject) => {
-        const unsubscribe = observer.subscribe((result) => {
-          if (result.isError) {
-            unsubscribe();
-            reject(result.error as Error);
-            return;
-          }
-
-          const action = result.data?.action;
-          if (action?.status === "success") {
-            unsubscribe();
-            resolve();
-            return;
-          }
-
-          if (action?.status === "error") {
-            unsubscribe();
-            reject(new Error(action.error?.message ?? "Åtgärden misslyckades"));
-          }
-        });
-
-        observer.fetchOptimistic(actionQueryOptions(actionId)).catch((err) => {
-          unsubscribe();
-          reject(err as Error);
-        });
-      });
-    },
-    [queryClient]
-  );
-
   // Full stop flow: graceful shutdown → snapshot → delete
   const doStop = useCallback(
     async (server: HetznerServer) => {
       const { name, id } = server;
       addLog(`Sparar och stänger av ${name}…`);
       try {
-        setOp(name, "stopping", "Stänger av…");
+        setOp(name, "stopping", "Stänger av och skapar snapshot…");
 
-        await sendAction({
-          data: {
-            id,
-            action: "shutdown",
-          },
-        });
+        const res = await stopServer({ data: { serverId: id } });
 
-        await waitForServerStatus(id, "off");
+        if (!res.success) {
+          throw new Error(res.error || "Misslyckades med att stoppa servern");
+        }
 
-        setOp(name, "snapshotting", "Skapar snapshot…");
-        addLog(`${name}: av – skapar snapshot`);
-        const snapData = await takeSnapshot({ data: { serverId: id } });
-
-        await waitForAction(snapData.action.id);
-        queryClient.invalidateQueries({ queryKey: ["snapshots"] });
-
-        setOp(name, "deleting", "Raderar server…");
-        addLog(`${name}: snapshot klar – raderar server`);
-        const delRes = await deleteServer({ data: { serverId: id } });
-        if (!delRes.success) throw new Error("Misslyckades med att radera servern");
         addLog(`✓ ${name} sparad och stängd`);
-        queryClient.invalidateQueries({ queryKey: ["servers"] });
+        queryClient.invalidateQueries({ queryKey: ["list-all"] });
       } catch (e) {
         addLog(`✗ ${name}: ${(e as Error).message}`);
       } finally {
         clearOp(name);
       }
     },
-    [addLog, waitForServerStatus, waitForAction, queryClient]
+    [addLog, queryClient]
   );
 
-  // Full start flow: create server from snapshot (or cloud-init for first launch)
+  // Full start flow: server resolves snapshot automatically, falls back to fresh install
   const doStart = useCallback(
-    async ({ name, serverType, location, snapshotId }: StartParams) => {
-      addLog(
-        snapshotId
-          ? `Startar ${name} från snapshot…`
-          : `Startar ${name} – installerar från grunden…`
-      );
+    async ({ name, serverType, location }: { name: string; serverType?: string; location?: string }) => {
+      addLog(`Startar ${name}…`);
       try {
-        setOp(name, "creating", "Skapar server…");
-        const data = await createServer({ data: { snapshotId, name, serverType, location } });
-        const newId = data.server.id;
+        setOp(name, "creating", "Skapar server och väntar på start…");
 
-        setOp(name, "booting", "Väntar på start…");
-        addLog(`${name}: server skapad – väntar på start`);
-        let liveServer: HetznerServer | null = null;
-        if (newId) liveServer = await waitForServerStatus(newId, "running");
+        const res = await startServer({
+          data: { name, options: { serverType, location } },
+        });
 
-        const ip = liveServer?.public_net.ipv4?.ip;
-        // Hetzner gives IPv6 as a network (e.g. "2a01:4f8::/64"); the server sits at ::1
-        const ipv6Network = liveServer?.public_net.ipv6?.ip;
-        const ipv6 = ipv6Network ? ipv6Network.split("/")[0].replace(/::$/, "::1") : null;
+        if (!res.success) {
+          throw new Error(res.error || "Misslyckades med att starta servern");
+        }
 
-        if (ip && ipv6) {
-          setOp(name, "dns", "Uppdaterar DNS…");
-          addLog(`${name}: online (${ip ?? ipv6}) – uppdaterar DNS`);
-          try {
-            const dnsData = await updateDns({ data: { ip, ipv6 } });
-            addLog(
-              `✓ DNS uppdaterad: ${(dnsData as { record: string }).record} A→${ip} AAAA→${ipv6}`
-            );
-          } catch (e) {
-            addLog(`✗ DNS misslyckades: ${(e as Error).message}`);
-          }
+        if (res.dnsRecord) {
+          addLog(`✓ DNS uppdaterad: ${res.dnsRecord.record} A→${res.dnsRecord.ip} AAAA→${res.dnsRecord.ipv6}`);
         }
 
         addLog(`✓ ${name} online`);
-        queryClient.invalidateQueries({ queryKey: ["servers"] });
+        queryClient.invalidateQueries({ queryKey: ["list-all"] });
       } catch (e) {
         addLog(`✗ ${name}: ${(e as Error).message}`);
       } finally {
         clearOp(name);
       }
     },
-    [addLog, queryClient, waitForServerStatus]
+    [addLog, queryClient]
   );
 
   // Simple single-step actions (reboot, poweron for manually-stopped servers)
@@ -256,55 +155,38 @@ function App() {
     [addLog]
   );
 
-  // Merge servers + snapshots into a unified entity list for rendering
+  // Build entity list from server-side merged data + client-side pending state
   const entities = useMemo<Entity[]>(() => {
-    const liveByName = Object.fromEntries(servers.map((s) => [s.name, s]));
+    const liveNames = new Set(servers.map((s) => s.name));
 
-    // Keep only the newest snapshot per server name
-    const latestSnap: Record<string, { snap: HetznerImage; name: string }> = {};
-    for (const snap of snapshots) {
-      const name =
-        snap.labels["server-name"] ?? snap.description.replace("starbound:", "") ?? "unknown";
-      const existing = latestSnap[name];
-      if (!existing || new Date(snap.created) > new Date(existing.snap.created)) {
-        latestSnap[name] = { snap, name };
-      }
-    }
-
-    const result: Entity[] = [];
-
-    for (const server of servers) {
-      result.push({
-        type: "live",
+    const result: Entity[] = [
+      ...servers.map((server) => ({
+        type: "live" as const,
         key: `live-${server.id}`,
         server,
-        snapshot: latestSnap[server.name]?.snap ?? null,
+        snapshot: null,
         name: server.name,
-      });
-    }
-
-    for (const { name, snap } of Object.values(latestSnap)) {
-      if (!liveByName[name] && !opState[name]) {
-        result.push({
-          type: "dormant",
-          key: `dormant-${snap.id}`,
-          snapshot: snap,
+      })),
+      ...dormantServers
+        .filter(({ name }) => !opState[name])
+        .map(({ name, snapshot, serverType, location }) => ({
+          type: "dormant" as const,
+          key: `dormant-${snapshot.id}`,
+          snapshot,
           name,
-          serverType: snap.labels["server-type"],
-          location: snap.labels["location"],
-        });
-      }
-    }
+          serverType,
+          location,
+        })),
+    ];
 
-    // Show a placeholder card for names that are mid-operation but not yet in either list
     for (const [name, op] of Object.entries(opState)) {
-      if (!liveByName[name]) {
+      if (!liveNames.has(name)) {
         result.push({ type: "pending", key: `pending-${name}`, name, op });
       }
     }
 
     return result;
-  }, [servers, snapshots, opState]);
+  }, [servers, dormantServers, opState]);
 
   const showFresh = !isLoading && entities.length === 0;
 
@@ -369,7 +251,6 @@ function App() {
                         name: e.name,
                         serverType: e.serverType,
                         location: e.location,
-                        snapshotId: e.snapshot.id,
                       })
                     }
                   />

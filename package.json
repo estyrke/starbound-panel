@@ -12,6 +12,7 @@
     "format": "prettier --write ."
   },
   "dependencies": {
+    "@small-tech/hetzner-cloud-openapi-client": "^1.0.0",
     "@tanstack/react-router": "^1.170.3",
     "@tanstack/react-start": "^1.168.4",
     "react": "^19.2.6",

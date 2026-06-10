@@ -1,42 +1,30 @@
-// Hetzner Cloud API — subset of fields used by this app
-
-export type ServerStatus =
-  | "running"
-  | "off"
-  | "stopping"
-  | "starting"
-  | "initializing"
-  | "rebuilding"
-  | "migrating"
-  | "deleting"
-  | "unknown";
-
-export interface HetznerServer {
+export type HetznerServer = {
   id: number;
   name: string;
-  status: ServerStatus;
+  status: string;
   created: string;
+  public_net: {
+    ipv4: { ip: string; dns_ptr: string } | null;
+    ipv6: { ip: string; dns_ptr: { ip: string; dns_ptr: string }[] | null } | null;
+  };
   server_type: { name: string; cores: number; memory: number };
   datacenter: { location: { name: string } };
-  public_net: {
-    ipv4: { ip: string } | null;
-    ipv6: { ip: string } | null;
-  };
-}
+  labels: Record<string, string>;
+};
 
-export interface HetznerImage {
+export type HetznerAction = {
   id: number;
+  status: "running" | "success" | "error";
+  error: { code: string; message: string } | null;
+};
+
+export type HetznerImage = {
+  id: number;
+  name: string | null;
   description: string;
   created: string;
   labels: Record<string, string>;
-}
-
-export interface HetznerAction {
-  id: number;
-  status: "running" | "success" | "error";
-  error?: { code: string; message: string };
-}
-
+};
 // App state
 
 export interface OpState {

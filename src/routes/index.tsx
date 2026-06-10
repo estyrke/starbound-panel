@@ -1,5 +1,6 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, useRouter } from "@tanstack/react-router";
 import { useState, useCallback, useMemo } from "react";
+import { getAuthStatus, login, logout } from "../lib/auth.functions.js";
 import styles from "../styles/App.module.css";
 import type {
   HetznerServer,
@@ -53,13 +54,85 @@ function ts(): string {
 }
 
 export const Route = createFileRoute("/")({
-  loader: async ({ context }) => {
-    await context.queryClient.ensureQueryData(listAllQueryOptions());
+  beforeLoad: async () => {
+    const { authed } = await getAuthStatus();
+    return { authed };
   },
-  component: App,
+  loader: async ({ context }) => {
+    if (context.authed) {
+      await context.queryClient.ensureQueryData(listAllQueryOptions());
+    }
+  },
+  component: RootComponent,
 });
 
+function RootComponent() {
+  const { authed } = Route.useRouteContext();
+  return authed ? <App /> : <LoginForm />;
+}
+
+function LoginForm() {
+  const router = useRouter();
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    setError(false);
+    try {
+      const res = await login({ data: { password } });
+      if (res.ok) {
+        await router.invalidate();
+      } else {
+        setError(true);
+      }
+    } catch {
+      setError(true);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className={styles.layout}>
+      <header className={styles.header}>
+        <div className={styles.logo}>
+          <span className={styles.logoIcon}>⬡</span>
+          <span>STARBOUND</span>
+          <span className={styles.logoDim}>CONTROL</span>
+        </div>
+      </header>
+      <main className={styles.main}>
+        <form className={`${styles.card} ${styles.loginCard}`} onSubmit={submit}>
+          <div className={styles.serverName}>INLOGGNING</div>
+          <input
+            className={styles.loginInput}
+            type="password"
+            placeholder="LÖSENORD"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            autoFocus
+          />
+          {error && <div className={styles.errorBanner}>⚠ Fel lösenord</div>}
+          <div className={styles.cardActions}>
+            <ActionBtn
+              label={busy ? "LOGGAR IN…" : "LOGGA IN"}
+              icon="▶"
+              color="var(--green)"
+              disabled={busy || password.length === 0}
+              wide
+            />
+          </div>
+        </form>
+      </main>
+    </div>
+  );
+}
+
 function App() {
+  const router = useRouter();
   const { data, isLoading, error } = useSuspenseQuery(listAllQueryOptions());
   const servers = data?.servers ?? [];
   const dormantServers = data?.dormant ?? [];
@@ -198,13 +271,24 @@ function App() {
           <span>STARBOUND</span>
           <span className={styles.logoDim}>CONTROL</span>
         </div>
-        <button
-          className={styles.refreshBtn}
-          onClick={() => queryClient.refetchQueries()}
-          disabled={isLoading}
-        >
-          {isLoading ? "↻ LADDAR…" : "↻ UPPDATERA"}
-        </button>
+        <div className={styles.headerActions}>
+          <button
+            className={styles.refreshBtn}
+            onClick={() => queryClient.refetchQueries()}
+            disabled={isLoading}
+          >
+            {isLoading ? "↻ LADDAR…" : "↻ UPPDATERA"}
+          </button>
+          <button
+            className={styles.refreshBtn}
+            onClick={async () => {
+              await logout();
+              await router.invalidate();
+            }}
+          >
+            ⏏ LOGGA UT
+          </button>
+        </div>
       </header>
 
       <main className={styles.main}>

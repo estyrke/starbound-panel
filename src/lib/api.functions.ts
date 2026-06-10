@@ -1,5 +1,6 @@
 import { queryOptions } from "@tanstack/react-query";
 import { createServerFn } from "@tanstack/react-start";
+import { authMiddleware } from "./auth.middleware";
 import { updateDns } from "./gandi.server";
 import {
   createServer,
@@ -21,7 +22,7 @@ type DormantServer = {
   location?: string;
 };
 
-export const listAll = createServerFn().handler(
+export const listAll = createServerFn().middleware([authMiddleware]).handler(
   async (): Promise<{ servers: HetznerServer[]; dormant: DormantServer[] }> => {
     const token = process.env.HETZNER_API_TOKEN;
     if (!token) throw new Error("HETZNER_API_TOKEN not configured");
@@ -68,6 +69,7 @@ interface StartServerOptions {
 }
 
 export const startServer = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
   .inputValidator((data: { name: string; options?: StartServerOptions }) => data)
   .handler(
     async ({
@@ -138,6 +140,7 @@ export const startServer = createServerFn({ method: "POST" })
   );
 
 export const stopServer = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
   .inputValidator((data: { serverId: number }) => data)
   .handler(async ({ data }): Promise<{ success: boolean; snapshotId?: number; error?: string }> => {
     const token = process.env.HETZNER_API_TOKEN;
@@ -179,6 +182,7 @@ export const stopServer = createServerFn({ method: "POST" })
   });
 
 export const sendAction = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
   .inputValidator((data: { id: number; action: "reboot" | "poweron" }) => data)
   .handler(async ({ data }) => {
     await hetznerSendAction(data);

@@ -57,6 +57,36 @@
   cursor: not-allowed;
 }
 
+.headerActions {
+  display: flex;
+  gap: 0.6rem;
+}
+
+/* LOGIN */
+
+.loginCard {
+  max-width: 22rem;
+  margin: 4rem auto 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.loginInput {
+  font-family: var(--font-mono);
+  font-size: 0.9rem;
+  letter-spacing: 0.1em;
+  color: var(--text);
+  background: transparent;
+  border: 1px solid var(--border);
+  padding: 0.6rem 0.9rem;
+  outline: none;
+  transition: border-color 0.2s;
+}
+.loginInput:focus {
+  border-color: var(--accent);
+}
+
 /* MAIN */
 .main {
   flex: 1;

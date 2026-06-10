@@ -27,8 +27,12 @@ export type HetznerImage = {
 };
 // App state
 
+import type { StartPhase, StopPhase } from "./flows";
+
+export type OpPhase = StartPhase | StopPhase | "reboot" | "poweron";
+
 export interface OpState {
-  phase: string;
+  phase: OpPhase;
   label: string;
 }
 

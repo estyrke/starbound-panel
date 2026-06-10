@@ -6,6 +6,7 @@ import type {
   HetznerServer,
   HetznerImage,
   OpState,
+  OpPhase,
   Entity,
   LiveEntity,
   DormantEntity,
@@ -14,10 +15,29 @@ import type {
 import {
   sendAction,
   listAllQueryOptions,
-  startServer,
-  stopServer,
+  startServerInit,
+  stopServerInit,
+  snapshotServer,
+  deleteServerById,
+  getServerStatus,
+  getActionStatus,
+  updateDnsForServer,
 } from "../lib/api.functions.js";
+import { runStartFlow, runStopFlow, type StartPhase, type StopPhase } from "../lib/flows.js";
 import { useSuspenseQuery, useQueryClient } from "@tanstack/react-query";
+
+const START_LABELS: Record<StartPhase, string> = {
+  creating: "Skapar server…",
+  "waiting-running": "Väntar på att servern startar…",
+  dns: "Uppdaterar DNS…",
+};
+
+const STOP_LABELS: Record<StopPhase, string> = {
+  "shutting-down": "Stänger av…",
+  "waiting-off": "Väntar på avstängning…",
+  snapshotting: "Skapar snapshot…",
+  deleting: "Raderar server…",
+};
 
 const STATUS_COLOR: Record<string, string> = {
   running: "var(--green)",
@@ -146,7 +166,7 @@ function App() {
     setLog((prev) => [`[${ts()}] ${msg}`, ...prev].slice(0, 50));
   }, []);
 
-  const setOp = (name: string, phase: string, label: string) =>
+  const setOp = (name: string, phase: OpPhase, label: string) =>
     setOpState((s) => ({ ...s, [name]: { phase, label } }));
   const clearOp = (name: string) =>
     setOpState((s) => {
@@ -155,19 +175,18 @@ function App() {
       return next;
     });
 
-  // Full stop flow: graceful shutdown → snapshot → delete
+  // Full stop flow: graceful shutdown → snapshot → delete, driven step by step
+  // from the client so no single request runs for minutes
   const doStop = useCallback(
     async (server: HetznerServer) => {
       const { name, id } = server;
       addLog(`Sparar och stänger av ${name}…`);
       try {
-        setOp(name, "stopping", "Stänger av och skapar snapshot…");
-
-        const res = await stopServer({ data: { serverId: id } });
-
-        if (!res.success) {
-          throw new Error(res.error || "Misslyckades med att stoppa servern");
-        }
+        await runStopFlow(
+          { stopServerInit, getServerStatus, snapshotServer, getActionStatus, deleteServerById },
+          { serverId: id },
+          (phase) => setOp(name, phase, STOP_LABELS[phase])
+        );
 
         addLog(`✓ ${name} sparad och stängd`);
         queryClient.invalidateQueries({ queryKey: ["list-all"] });
@@ -185,18 +204,17 @@ function App() {
     async ({ name, serverType, location }: { name: string; serverType?: string; location?: string }) => {
       addLog(`Startar ${name}…`);
       try {
-        setOp(name, "creating", "Skapar server och väntar på start…");
-
-        const res = await startServer({
-          data: { name, options: { serverType, location } },
-        });
-
-        if (!res.success) {
-          throw new Error(res.error || "Misslyckades med att starta servern");
-        }
+        const res = await runStartFlow(
+          { startServerInit, getServerStatus, updateDnsForServer },
+          { name, serverType, location },
+          (phase) => setOp(name, phase, START_LABELS[phase])
+        );
 
         if (res.dnsRecord) {
           addLog(`✓ DNS uppdaterad: ${res.dnsRecord.record} A→${res.dnsRecord.ip} AAAA→${res.dnsRecord.ipv6}`);
+        }
+        if (res.dnsError) {
+          addLog(`⚠ DNS-uppdatering misslyckades: ${res.dnsError}`);
         }
 
         addLog(`✓ ${name} online`);

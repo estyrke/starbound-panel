@@ -24,9 +24,6 @@ type DormantServer = {
 
 export const listAll = createServerFn().middleware([authMiddleware]).handler(
   async (): Promise<{ servers: HetznerServer[]; dormant: DormantServer[] }> => {
-    const token = process.env.HETZNER_API_TOKEN;
-    if (!token) throw new Error("HETZNER_API_TOKEN not configured");
-
     try {
       const [servers, snapshots] = await Promise.all([listServers(), listSnapshots()]);
 
@@ -61,125 +58,87 @@ export const listAllQueryOptions = () =>
   queryOptions({
     queryKey: ["list-all"],
     queryFn: () => listAll(),
+    refetchInterval: 10_000,
   });
 
-interface StartServerOptions {
-  serverType?: string;
-  location?: string;
-}
+// ── Short single-round-trip server functions. The client orchestrates the
+// multi-step start/stop flows (see flows.ts) so no request blocks for minutes.
 
-export const startServer = createServerFn({ method: "POST" })
+export const startServerInit = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
-  .inputValidator((data: { name: string; options?: StartServerOptions }) => data)
-  .handler(
-    async ({
-      data,
-    }): Promise<{
-      server?: HetznerServer;
-      dnsRecord?: { record: string; ip: string; ipv6: string };
-      success: boolean;
-      error?: string;
-    }> => {
-      const token = process.env.HETZNER_API_TOKEN;
-      if (!token) throw new Error("HETZNER_API_TOKEN not configured");
+  .inputValidator((data: { name: string; serverType?: string; location?: string }) => data)
+  .handler(async ({ data }): Promise<{ serverId: number }> => {
+    const snapshot = await getLatestSnapshot(data.name);
+    const createRes = await createServer({
+      name: data.name,
+      snapshotId: snapshot?.id,
+      serverType: data.serverType,
+      location: data.location,
+    });
+    if (!createRes.server) throw new Error("Failed to create server: no server data");
+    return { serverId: createRes.server.id };
+  });
 
-      const { name, options = {} } = data;
-
-      try {
-        // Find latest snapshot for this server name
-        const snapRes = await getLatestSnapshot(name);
-        const snapshotId = snapRes?.id;
-
-        // Step 1: Create server
-        const createRes = await createServer({
-          name,
-          snapshotId,
-          serverType: options.serverType,
-          location: options.location,
-        });
-
-        if (!createRes.server) throw new Error("Failed to create server: no server data");
-
-        const serverId = createRes.server.id;
-        let liveServer: HetznerServer | null = null;
-
-        // Step 2: Wait for running (poll up to 90 times, 4s apart)
-        for (let i = 0; i < 90; i++) {
-          await new Promise((r) => setTimeout(r, 4000));
-          const found = await getServer(serverId);
-          if (found?.status === "running") {
-            liveServer = found;
-            break;
-          }
-        }
-
-        if (!liveServer) throw new Error("Server failed to start (timeout)");
-
-        const ip = liveServer.public_net.ipv4?.ip;
-        const ipv6Network = liveServer.public_net.ipv6?.ip;
-        const ipv6 = ipv6Network ? ipv6Network.split("/")[0].replace(/::$/, "::1") : null;
-
-        let dnsRecord: { record: string; ip: string; ipv6: string } | undefined;
-
-        // Step 3: Update DNS if IPs available
-        if (ip && ipv6) {
-          try {
-            const dnsRes = await updateDns({ ip, ipv6 });
-            dnsRecord = dnsRes as { record: string; ip: string; ipv6: string };
-          } catch (e) {
-            // DNS failure is not fatal, log and continue
-            console.error("DNS update failed:", (e as Error).message);
-          }
-        }
-
-        return { server: liveServer, dnsRecord, success: true };
-      } catch (e) {
-        return { success: false, error: (e as Error).message };
-      }
-    }
-  );
-
-export const stopServer = createServerFn({ method: "POST" })
+export const stopServerInit = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .inputValidator((data: { serverId: number }) => data)
-  .handler(async ({ data }): Promise<{ success: boolean; snapshotId?: number; error?: string }> => {
-    const token = process.env.HETZNER_API_TOKEN;
-    if (!token) throw new Error("HETZNER_API_TOKEN not configured");
+  .handler(async ({ data }): Promise<{ success: true }> => {
+    await hetznerSendAction({ id: data.serverId, action: "shutdown" });
+    return { success: true };
+  });
 
-    const { serverId } = data;
+export const snapshotServer = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .inputValidator((data: { serverId: number }) => data)
+  .handler(async ({ data }): Promise<{ actionId: number; imageId?: number }> => {
+    const res = await takeSnapshot(data.serverId);
+    if (!res.action) throw new Error("Snapshot creation returned no action");
+    return { actionId: res.action.id, imageId: res.image?.id };
+  });
 
+export const deleteServerById = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .inputValidator((data: { serverId: number }) => data)
+  .handler(async ({ data }): Promise<{ success: true }> => {
+    return deleteServer(data.serverId);
+  });
+
+export const getServerStatus = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .inputValidator((data: { serverId: number }) => data)
+  .handler(async ({ data }): Promise<{ status: string } | null> => {
     try {
-      // Step 1: Shutdown
-      await hetznerSendAction({ id: serverId, action: "shutdown" });
-
-      // Step 2: Wait for off (poll up to 90 times, 4s apart)
-      for (let i = 0; i < 90; i++) {
-        await new Promise((r) => setTimeout(r, 4000));
-        const found = await getServer(serverId);
-        if (!found || found.status === "off") break;
-      }
-
-      // Step 3: Snapshot (which auto-cleans old snapshots)
-      const snapRes = await takeSnapshot(serverId);
-      if (!snapRes.action) throw new Error("Snapshot creation returned no action");
-      const snapshotActionId = snapRes.action.id;
-
-      // Step 4: Wait for snapshot action to complete
-      for (let i = 0; i < 90; i++) {
-        await new Promise((r) => setTimeout(r, 4000));
-        const action = await getAction(snapshotActionId);
-        if (action.status === "success") break;
-        if (action.status === "error") throw new Error(action.error?.message ?? "Snapshot failed");
-      }
-
-      // Step 5: Delete server
-      await deleteServer(serverId);
-
-      return { success: true, snapshotId: snapRes.image?.id };
+      const server = await getServer(data.serverId);
+      return server ? { status: server.status } : null;
     } catch (e) {
-      return { success: false, error: (e as Error).message };
+      // A deleted server is a normal terminal state for the stop flow
+      if ((e as Error).message.includes("404")) return null;
+      throw e;
     }
   });
+
+export const getActionStatus = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .inputValidator((data: { actionId: number }) => data)
+  .handler(async ({ data }): Promise<{ status: string; errorMessage?: string }> => {
+    const action = await getAction(data.actionId);
+    return { status: action.status, errorMessage: action.error?.message };
+  });
+
+export const updateDnsForServer = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .inputValidator((data: { serverId: number }) => data)
+  .handler(
+    async ({ data }): Promise<{ record: string; ip: string; ipv6: string } | null> => {
+      const server = await getServer(data.serverId);
+      const ip = server?.public_net.ipv4?.ip;
+      const ipv6Network = server?.public_net.ipv6?.ip;
+      const ipv6 = ipv6Network ? ipv6Network.split("/")[0].replace(/::$/, "::1") : null;
+      if (!ip || !ipv6) return null;
+      const res = await updateDns({ ip, ipv6 });
+      return { record: res.record, ip: res.ip, ipv6: res.ipv6 };
+    }
+  );
 
 export const sendAction = createServerFn({ method: "POST" })
   .middleware([authMiddleware])

@@ -1,6 +1,6 @@
 # Starbound Panel
 
-Kontrollpanel för att hantera en Starbound-dedikerad server på Hetzner Cloud. Byggd med React + Vercel Serverless Functions.
+Kontrollpanel för att hantera en Starbound-dedikerad server på Hetzner Cloud. Byggd med [TanStack Start](https://tanstack.com/start) (React + serverfunktioner i samma app).
 
 Istället för att låta servern gå på tomgång sparas den ned som en snapshot och tas bort när du stänger av den. När du startar igen skapas en ny server från den senaste snapshoten – du betalar bara när du spelar.
 
@@ -15,39 +15,44 @@ Istället för att låta servern gå på tomgång sparas den ned som en snapshot
 
 När servern är uppe uppdateras DNS-poster (A + AAAA) automatiskt hos Gandi.
 
+Start- och stoppflödena körs stegvis från klienten: varje steg är ett kort serverfunktions-anrop (skapa, polla status, snapshot, radera), så ingen enskild HTTP-förfrågan behöver leva längre än några sekunder – viktigt vid serverless-deploy. Panelen kräver inloggning med lösenord (`PANEL_PASSWORD`); sessionen lagras i en krypterad httpOnly-cookie.
+
 ## Projektstruktur
 
 ```
-starbound-panel/
-├── api/
-│   ├── servers.js         # GET  /api/servers        – lista servrar
-│   ├── action.js          # POST /api/action         – reboot / poweron
-│   ├── snapshot.js        # POST /api/snapshot       – skapa snapshot
-│   ├── snapshots.js       # GET  /api/snapshots      – lista snapshots
-│   ├── delete-server.js   # DELETE /api/delete-server
-│   ├── create-server.js   # POST /api/create-server  – skapa från snapshot eller cloud-init
-│   ├── poll-action.js     # GET  /api/poll-action    – poll Hetzner action-status
-│   └── update-dns.js      # POST /api/update-dns     – uppdatera Gandi A + AAAA
+starbound-server/
 ├── src/
-│   ├── main.jsx
-│   ├── App.jsx
-│   ├── App.module.css
-│   └── index.css
-├── index.html
+│   ├── routes/
+│   │   ├── __root.tsx          # HTML-skal, providers
+│   │   └── index.tsx           # Panelen: login, serverkort, systemlogg
+│   ├── lib/
+│   │   ├── api.functions.ts    # Serverfunktioner (RPC) – kräver inloggning
+│   │   ├── auth.functions.ts   # login / logout / getAuthStatus
+│   │   ├── auth.middleware.ts  # 401-middleware för serverfunktionerna
+│   │   ├── auth.server.ts      # Sessionshantering (krypterad cookie)
+│   │   ├── hetzner.server.ts   # Hetzner Cloud-klient (endast server)
+│   │   ├── gandi.server.ts     # Gandi LiveDNS-klient (endast server)
+│   │   ├── flows.ts            # Klientorkestrering av start/stopp-stegen
+│   │   ├── helpers.ts          # Rena hjälpfunktioner (enhetstestade)
+│   │   └── types.ts
+│   └── styles/
 ├── package.json
-├── vite.config.js
+├── vite.config.ts
+├── vitest.config.ts
 └── vercel.json
 ```
 
 ## Miljövariabler
 
-Sätt dessa under **Vercel → Project Settings → Environment Variables**.
+Sätt dessa under **Vercel → Project Settings → Environment Variables** (eller i `.env` lokalt).
 
-### Obligatorisk
+### Obligatoriska
 
 | Variabel | Beskrivning |
 |----------|-------------|
 | `HETZNER_API_TOKEN` | API-nyckel från [console.hetzner.cloud](https://console.hetzner.cloud) → Security → API Tokens |
+| `PANEL_PASSWORD` | Lösenordet för att logga in i panelen |
+| `SESSION_SECRET` | Hemlighet som krypterar sessionscookien, minst 32 tecken (t.ex. `openssl rand -hex 32`) |
 
 ### Gandi DNS (krävs för automatisk DNS-uppdatering)
 
@@ -66,6 +71,7 @@ DNS-posterna `play.example.com A` och `play.example.com AAAA` sätts automatiskt
 | `SERVER_NAME` | Namn på servern i Hetzner | `starbound` |
 | `HETZNER_SERVER_TYPE` | Servertyp | `cx23` |
 | `HETZNER_LOCATION` | Datacenter | `hel1` |
+| `SNAPSHOT_RETENTION_COUNT` | Antal snapshots som behålls per server | `2` |
 
 ### Första uppstart utan snapshot (valfria)
 
@@ -78,45 +84,24 @@ Krävs bara om ingen snapshot finns och du klickar **NYTT SPEL**. Starbound ladd
 
 ## Deploy till Vercel
 
-### 1. Pusha till GitHub
-
-```bash
-git init
-git add .
-git commit -m "init"
-gh repo create starbound-panel --private --push --source .
-```
-
-### 2. Importera i Vercel
-
-1. Gå till [vercel.com/new](https://vercel.com/new)
-2. Välj ditt GitHub-repo
-3. Klicka **Deploy** – inställningarna hämtas från `vercel.json` automatiskt
-
-### 3. Lägg till miljövariabler
-
-Gå till **Project Settings → Environment Variables** och lägg till variablerna ovan. Kör sedan ett nytt deploy (Deployments → Redeploy).
+1. Pusha repot till GitHub
+2. Importera på [vercel.com/new](https://vercel.com/new) – Vercel har inbyggt stöd för TanStack Start
+3. Lägg till miljövariablerna ovan under **Project Settings → Environment Variables** och kör ett nytt deploy
 
 ## Lokal utveckling
 
 ```bash
-npm install
+pnpm install
 ```
 
-Skapa `.env.local`:
-```
-HETZNER_API_TOKEN=...
-GANDI_API_KEY=...
-GANDI_DOMAIN=example.com
-GANDI_RECORD=play
-```
+Skapa `.env` (gitignorerad) med variablerna ovan, sedan:
 
-Starta:
 ```bash
-npx vercel dev
+pnpm dev        # dev-server på http://localhost:3000
+pnpm typecheck  # tsc --noEmit
+pnpm lint       # eslint
+pnpm test       # vitest
 ```
-
-`vercel dev` kör både API-funktionerna och frontend-servern (Vite) i en process. Öppna URL:en som skrivs ut – vanligtvis `http://localhost:3000`.
 
 ## Felsökning
 
@@ -138,4 +123,4 @@ Starbound-filerna hamnar under `/home/steam/starbound/`.
 
 ### Snapshot
 
-Hetzner-snapshots sparas med etiketten `managed=starbound-panel` och innehåller servernamn, typ och datacenter i labels – det är det panelen använder för att återskapa servern med samma konfiguration.
+Hetzner-snapshots sparas med etiketten `managed=starbound-panel` och innehåller servernamn, typ och datacenter i labels – det är det panelen använder för att återskapa servern med samma konfiguration. De `SNAPSHOT_RETENTION_COUNT` senaste behålls per servernamn; äldre raderas automatiskt efter varje ny snapshot.

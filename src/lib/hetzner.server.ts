@@ -1,4 +1,5 @@
 import configureClient, { CreateServerRequest } from "@small-tech/hetzner-cloud-openapi-client";
+import { selectSnapshotsToDelete } from "./helpers";
 
 const HETZNER_API = "https://api.hetzner.cloud/v1/";
 
@@ -304,7 +305,9 @@ export const getLatestSnapshot = async (serverName: string) => {
 export const cleanupOldSnapshots = async (
   serverName: string
 ): Promise<{ deletedCount: number; remaining: number; policy: string }> => {
-  const retentionCount = parseInt(process.env.SNAPSHOT_RETENTION_COUNT ?? "2", 10);
+  const parsed = parseInt(process.env.SNAPSHOT_RETENTION_COUNT ?? "2", 10);
+  // Guard against a misconfigured env var: slice(NaN) would select everything
+  const retentionCount = Number.isFinite(parsed) && parsed >= 0 ? parsed : 2;
 
   try {
     const api = await getApi();
@@ -321,17 +324,14 @@ export const cleanupOldSnapshots = async (
     const { images } = r.body;
     const snapshotIds = images.map((img) => img.id);
 
-    if (snapshotIds.length <= retentionCount) {
-      // No cleanup needed
+    const toDelete = selectSnapshotsToDelete(snapshotIds, retentionCount);
+    if (toDelete.length === 0) {
       return {
         deletedCount: 0,
         remaining: snapshotIds.length,
         policy: `keep_last_${retentionCount}`,
       };
     }
-
-    // Delete snapshots beyond retention count
-    const toDelete = snapshotIds.slice(retentionCount);
     await Promise.all(
       toDelete.map((id) =>
         api.deleteImage({ path: { id } }).then((res) => {

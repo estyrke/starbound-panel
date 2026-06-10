@@ -13,41 +13,14 @@ import {
   sendAction as hetznerSendAction,
   takeSnapshot,
 } from "./hetzner.server";
-import { HetznerImage, HetznerServer } from "./types";
-
-type DormantServer = {
-  name: string;
-  snapshot: HetznerImage;
-  serverType?: string;
-  location?: string;
-};
+import { buildDormantList, deriveIpv6Host } from "./helpers";
+import { DormantServer, HetznerServer } from "./types";
 
 export const listAll = createServerFn().middleware([authMiddleware]).handler(
   async (): Promise<{ servers: HetznerServer[]; dormant: DormantServer[] }> => {
     try {
       const [servers, snapshots] = await Promise.all([listServers(), listSnapshots()]);
-
-      const liveNames = new Set<string>(servers.map((s) => s.name));
-
-      const latestSnap: Record<string, HetznerImage> = {};
-      for (const snap of snapshots) {
-        const name =
-          snap.labels["server-name"] ?? snap.description.replace("starbound:", "") ?? "unknown";
-        if (!latestSnap[name] || new Date(snap.created) > new Date(latestSnap[name].created)) {
-          latestSnap[name] = snap;
-        }
-      }
-
-      const dormant: DormantServer[] = Object.entries(latestSnap)
-        .filter(([name]) => !liveNames.has(name))
-        .map(([name, snap]) => ({
-          name,
-          snapshot: snap,
-          serverType: snap.labels["server-type"],
-          location: snap.labels["location"],
-        }));
-
-      return { servers, dormant };
+      return { servers, dormant: buildDormantList(servers, snapshots) };
     } catch (e) {
       throw new Error((e as Error).message, { cause: e });
     }
@@ -132,8 +105,7 @@ export const updateDnsForServer = createServerFn({ method: "POST" })
     async ({ data }): Promise<{ record: string; ip: string; ipv6: string } | null> => {
       const server = await getServer(data.serverId);
       const ip = server?.public_net.ipv4?.ip;
-      const ipv6Network = server?.public_net.ipv6?.ip;
-      const ipv6 = ipv6Network ? ipv6Network.split("/")[0].replace(/::$/, "::1") : null;
+      const ipv6 = deriveIpv6Host(server?.public_net.ipv6?.ip);
       if (!ip || !ipv6) return null;
       const res = await updateDns({ ip, ipv6 });
       return { record: res.record, ip: res.ip, ipv6: res.ipv6 };

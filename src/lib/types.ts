@@ -12,6 +12,13 @@ export type HetznerServer = {
   labels: Record<string, string>;
 };
 
+export type DormantServer = {
+  name: string;
+  snapshot: HetznerImage;
+  serverType?: string;
+  location?: string;
+};
+
 export type HetznerAction = {
   id: number;
   status: "running" | "success" | "error";

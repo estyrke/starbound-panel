@@ -1,4 +1,10 @@
-*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
 
 :root {
   --bg: #050810;
@@ -12,11 +18,13 @@
   --yellow: #ffcc00;
   --text: #c8deff;
   --text-dim: #4a6d9c;
-  --font-mono: 'Share Tech Mono', monospace;
-  --font-ui: 'Exo 2', sans-serif;
+  --font-mono: "Share Tech Mono", monospace;
+  --font-ui: "Exo 2", sans-serif;
 }
 
-html, body, #root {
+html,
+body,
+#root {
   height: 100%;
   background: var(--bg);
   color: var(--text);
@@ -25,11 +33,18 @@ html, body, #root {
 
 body {
   background-image:
-    radial-gradient(ellipse 80% 50% at 50% -20%, rgba(0,212,255,0.08) 0%, transparent 60%),
-    radial-gradient(ellipse 50% 80% at 80% 80%, rgba(123,79,255,0.06) 0%, transparent 60%);
+    radial-gradient(ellipse 80% 50% at 50% -20%, rgba(0, 212, 255, 0.08) 0%, transparent 60%),
+    radial-gradient(ellipse 50% 80% at 80% 80%, rgba(123, 79, 255, 0.06) 0%, transparent 60%);
   min-height: 100vh;
 }
 
-::-webkit-scrollbar { width: 6px; }
-::-webkit-scrollbar-track { background: var(--bg); }
-::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: var(--bg);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 3px;
+}

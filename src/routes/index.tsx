@@ -201,7 +201,15 @@ function App() {
 
   // Full start flow: server resolves snapshot automatically, falls back to fresh install
   const doStart = useCallback(
-    async ({ name, serverType, location }: { name: string; serverType?: string; location?: string }) => {
+    async ({
+      name,
+      serverType,
+      location,
+    }: {
+      name: string;
+      serverType?: string;
+      location?: string;
+    }) => {
       addLog(`Startar ${name}…`);
       try {
         const res = await runStartFlow(
@@ -211,7 +219,9 @@ function App() {
         );
 
         if (res.dnsRecord) {
-          addLog(`✓ DNS uppdaterad: ${res.dnsRecord.record} A→${res.dnsRecord.ip} AAAA→${res.dnsRecord.ipv6}`);
+          addLog(
+            `✓ DNS uppdaterad: ${res.dnsRecord.record} A→${res.dnsRecord.ip} AAAA→${res.dnsRecord.ipv6}`
+          );
         }
         if (res.dnsError) {
           addLog(`⚠ DNS-uppdatering misslyckades: ${res.dnsError}`);

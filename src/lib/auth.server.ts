@@ -13,5 +13,10 @@ export function getAppSession() {
     password: secret,
     name: "starbound-panel",
     maxAge: 60 * 60 * 24 * 30,
+    cookie: {
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "lax",
+      httpOnly: true,
+    },
   });
 }

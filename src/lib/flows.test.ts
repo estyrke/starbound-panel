@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { pollUntil, runStartFlow, runStopFlow } from "./flows";
 import type { StartFlowDeps, StopFlowDeps } from "./flows";
+import { pollUntil, runStartFlow, runStopFlow } from "./flows";
 
 const fast = { intervalMs: 0, timeoutMs: 1000 };
 
@@ -14,7 +14,11 @@ describe("pollUntil", () => {
 
   it("throws when the deadline passes", async () => {
     await expect(
-      pollUntil(async () => "never", (v) => v === "done", { intervalMs: 0, timeoutMs: 0 })
+      pollUntil(
+        async () => "never",
+        (v) => v === "done",
+        { intervalMs: 0, timeoutMs: 0 }
+      )
     ).rejects.toThrow(/timed out/);
   });
 });
@@ -24,7 +28,11 @@ function startDeps(overrides: Partial<StartFlowDeps> = {}): StartFlowDeps {
   return {
     startServerInit: vi.fn(async () => ({ serverId: 42 })),
     getServerStatus: vi.fn(async () => ({ status: statuses.shift() ?? "running" })),
-    updateDnsForServer: vi.fn(async () => ({ record: "play.example.com", ip: "1.2.3.4", ipv6: "::1" })),
+    updateDnsForServer: vi.fn(async () => ({
+      record: "play.example.com",
+      ip: "1.2.3.4",
+      ipv6: "::1",
+    })),
     ...overrides,
   };
 }

@@ -2,30 +2,30 @@ import { queryOptions } from "@tanstack/react-query";
 import { createServerFn } from "@tanstack/react-start";
 import { authMiddleware } from "./auth.middleware";
 import { updateDns } from "./gandi.server";
+import { buildDormantList, deriveIpv6Host } from "./helpers";
 import {
   createServer,
   deleteServer,
   getAction,
   getLatestSnapshot,
   getServer,
+  sendAction as hetznerSendAction,
   listServers,
   listSnapshots,
-  sendAction as hetznerSendAction,
   takeSnapshot,
 } from "./hetzner.server";
-import { buildDormantList, deriveIpv6Host } from "./helpers";
 import { DormantServer, HetznerServer } from "./types";
 
-export const listAll = createServerFn().middleware([authMiddleware]).handler(
-  async (): Promise<{ servers: HetznerServer[]; dormant: DormantServer[] }> => {
+export const listAll = createServerFn()
+  .middleware([authMiddleware])
+  .handler(async (): Promise<{ servers: HetznerServer[]; dormant: DormantServer[] }> => {
     try {
       const [servers, snapshots] = await Promise.all([listServers(), listSnapshots()]);
       return { servers, dormant: buildDormantList(servers, snapshots) };
     } catch (e) {
       throw new Error((e as Error).message, { cause: e });
     }
-  }
-);
+  });
 
 export const listAllQueryOptions = () =>
   queryOptions({
@@ -101,16 +101,14 @@ export const getActionStatus = createServerFn({ method: "POST" })
 export const updateDnsForServer = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .inputValidator((data: { serverId: number }) => data)
-  .handler(
-    async ({ data }): Promise<{ record: string; ip: string; ipv6: string } | null> => {
-      const server = await getServer(data.serverId);
-      const ip = server?.public_net.ipv4?.ip;
-      const ipv6 = deriveIpv6Host(server?.public_net.ipv6?.ip);
-      if (!ip || !ipv6) return null;
-      const res = await updateDns({ ip, ipv6 });
-      return { record: res.record, ip: res.ip, ipv6: res.ipv6 };
-    }
-  );
+  .handler(async ({ data }): Promise<{ record: string; ip: string; ipv6: string } | null> => {
+    const server = await getServer(data.serverId);
+    const ip = server?.public_net.ipv4?.ip;
+    const ipv6 = deriveIpv6Host(server?.public_net.ipv6?.ip);
+    if (!ip || !ipv6) return null;
+    const res = await updateDns({ ip, ipv6 });
+    return { record: res.record, ip: res.ip, ipv6: res.ipv6 };
+  });
 
 export const sendAction = createServerFn({ method: "POST" })
   .middleware([authMiddleware])

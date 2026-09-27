@@ -85,7 +85,7 @@ Krävs bara om ingen snapshot finns och du klickar **NYTT SPEL**. Starbound ladd
 ## Deploy till Vercel
 
 1. Pusha repot till GitHub
-2. Importera på [vercel.com/new](https://vercel.com/new) – Vercel har inbyggt stöd för TanStack Start
+2. Importera på [vercel.com/new](https://vercel.com/new) – bygget använder [Nitro](https://nitro.build) (`nitro/vite` i `vite.config.ts`), som automatiskt genererar Vercels Build Output (`.vercel/output`). Sätt ingen egen *Output Directory* i Vercel.
 3. Lägg till miljövariablerna ovan under **Project Settings → Environment Variables** och kör ett nytt deploy
 
 ## Lokal utveckling

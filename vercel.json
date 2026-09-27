@@ -1,5 +1,4 @@
 {
   "buildCommand": "npm run build",
-  "devCommand": "vite --port $PORT",
-  "outputDirectory": "dist"
+  "devCommand": "vite --port $PORT"
 }

@@ -5,7 +5,7 @@ import { defineConfig } from "eslint/config";
 import tseslint from "typescript-eslint";
 
 export default defineConfig(
-  { ignores: ["dist", "node_modules"] },
+  { ignores: ["dist", ".output", ".vercel", "node_modules"] },
   js.configs.recommended,
   {
     files: ["**/*.ts", "**/*.tsx"],

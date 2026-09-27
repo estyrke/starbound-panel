@@ -8,7 +8,7 @@ export type HetznerServer = {
     ipv6: { ip: string; dns_ptr: { ip: string; dns_ptr: string }[] | null } | null;
   };
   server_type: { name: string; cores: number; memory: number };
-  datacenter: { location: { name: string } };
+  location: { name: string };
   labels: Record<string, string>;
 };
 

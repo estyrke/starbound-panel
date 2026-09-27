@@ -427,7 +427,7 @@ function LiveCard({ server, op, isBusy, onStop, onReboot, onPowerOn }: LiveCardP
         <div>
           <div className={styles.serverName}>{server.name}</div>
           <div className={styles.serverMeta}>
-            {server.server_type.name} · {server.datacenter.location.name.toUpperCase()}
+            {server.server_type.name} · {server.location.name.toUpperCase()}
           </div>
         </div>
         <div className={styles.statusBadge} style={{ color: statusColor }}>

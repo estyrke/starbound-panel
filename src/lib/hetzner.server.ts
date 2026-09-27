@@ -263,7 +263,7 @@ export const takeSnapshot = async (serverId: number) => {
           managed: "starbound-panel",
           "server-name": server.name,
           "server-type": server.server_type.name,
-          location: server.datacenter.location.name,
+          location: server.location.name,
         },
       },
     });

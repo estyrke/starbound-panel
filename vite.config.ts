@@ -12,7 +12,12 @@ export default defineConfig({
   },
   plugins: [
     tanstackStart(),
-    nitro(),
+    nitro({
+      // The Hetzner client reads hetzner-cloud.openapi.json from its own
+      // directory at runtime, so trace the whole package into node_modules
+      // instead of bundling only its JS.
+      traceDeps: ["@small-tech/hetzner-cloud-openapi-client*"],
+    }),
     // react's vite plugin must come after start's vite plugin
     viteReact(),
   ],

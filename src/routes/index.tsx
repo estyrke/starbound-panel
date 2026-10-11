@@ -154,8 +154,6 @@ function LoginForm() {
 function App() {
   const router = useRouter();
   const { data, isLoading, error } = useSuspenseQuery(listAllQueryOptions());
-  const servers = data?.servers ?? [];
-  const dormantServers = data?.dormant ?? [];
 
   const queryClient = useQueryClient();
   // opState: tracks in-progress multi-step operations so cards can show live status
@@ -258,6 +256,8 @@ function App() {
 
   // Build entity list from server-side merged data + client-side pending state
   const entities = useMemo<Entity[]>(() => {
+    const servers = data?.servers ?? [];
+    const dormantServers = data?.dormant ?? [];
     const liveNames = new Set(servers.map((s) => s.name));
 
     const result: Entity[] = [
@@ -287,7 +287,7 @@ function App() {
     }
 
     return result;
-  }, [servers, dormantServers, opState]);
+  }, [data, opState]);
 
   const showFresh = !isLoading && entities.length === 0;
 

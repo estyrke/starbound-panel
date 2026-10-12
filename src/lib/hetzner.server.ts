@@ -1,5 +1,7 @@
 import configureClient, { CreateServerRequest } from "@small-tech/hetzner-cloud-openapi-client";
+import { gameIdOf, type Game, type GameId } from "./games";
 import { selectSnapshotsToDelete } from "./helpers";
+import { buildWorldPlan } from "./world-plan";
 
 const HETZNER_API = "https://api.hetzner.cloud/v1/";
 
@@ -82,24 +84,29 @@ export const getAction = async (id: number) => {
   }
 };
 
-// Finds an existing managed firewall or creates one with SSH + Starbound ports open.
-async function ensureFirewall(): Promise<number> {
+// Finds an existing managed firewall for the game or creates one with SSH + game ports open.
+async function ensureFirewall(firewall: Game["firewall"]): Promise<number> {
   const api = await getApi();
-  const listRes = await api.listFirewalls({ query: { name: "starbound-panel" } });
+  const listRes = await api.listFirewalls({ query: { name: firewall.name } });
   if (listRes.statusCode !== 200) {
     throw new Error(`Failed to list firewalls: HTTP ${listRes.statusCode}`);
   }
   const listData = listRes.body;
   if (listData.firewalls.length > 0) return listData.firewalls[0].id as number;
 
+  const anywhere = ["0.0.0.0/0", "::/0"];
   const createRes = await api.createFirewall({
     body: {
-      name: "starbound-panel",
+      name: firewall.name,
       rules: [
-        { direction: "in", protocol: "icmp", source_ips: ["0.0.0.0/0", "::/0"] },
-        { direction: "in", protocol: "tcp", port: "22", source_ips: ["0.0.0.0/0", "::/0"] },
-        { direction: "in", protocol: "tcp", port: "21025", source_ips: ["0.0.0.0/0", "::/0"] },
-        { direction: "in", protocol: "udp", port: "21025", source_ips: ["0.0.0.0/0", "::/0"] },
+        { direction: "in", protocol: "icmp", source_ips: anywhere },
+        { direction: "in", protocol: "tcp", port: "22", source_ips: anywhere },
+        ...firewall.ports.map((p) => ({
+          direction: "in" as const,
+          protocol: p.protocol,
+          port: p.port,
+          source_ips: anywhere,
+        })),
       ],
     },
   });
@@ -115,102 +122,57 @@ async function ensureFirewall(): Promise<number> {
   return createData.firewall.id;
 }
 
-// Quote a string as a single shell word (safe for spaces and special characters).
-function shellQuote(s: string): string {
-  return `'${s.replaceAll("'", `'\\''`)}'`;
-}
-
-// Cloud-init script for a fresh Starbound install via SteamCMD.
-// Requires STEAM_USER and STEAM_PASS env vars. Steam Guard must be disabled
-// or pre-authorised on the account used.
-function buildCloudInit(steamUser: string, steamPass: string): string {
-  const steamcmd = `/usr/games/steamcmd +login ${shellQuote(steamUser)} ${shellQuote(steamPass)} +force_install_dir /home/steam/starbound +app_update 211820 validate +quit`;
-  return `#!/bin/bash
-set -e
-export DEBIAN_FRONTEND=noninteractive
-apt-get update -y
-dpkg --add-architecture i386
-echo steam steam/question select "I AGREE" | sudo debconf-set-selections
-echo steam steam/license note '' | sudo debconf-set-selections
-apt-get update -y
-apt-get install -y lib32gcc-s1 libsdl2-2.0-0 steamcmd
-useradd -m -s /bin/bash steam 2>/dev/null || true
-su - steam -c ${shellQuote(steamcmd)}
-cat > /etc/systemd/system/starbound.service << 'SERVICE'
-[Unit]
-Description=Starbound Dedicated Server
-After=network.target
-
-[Service]
-User=steam
-WorkingDirectory=/home/steam/starbound/linux
-ExecStart=/home/steam/starbound/linux/starbound_server
-Restart=on-failure
-RestartSec=10
-
-[Install]
-WantedBy=multi-user.target
-SERVICE
-systemctl daemon-reload
-systemctl enable starbound
-systemctl start starbound
-`;
-}
-
 interface CreateServerBody {
-  snapshotId?: number;
+  game?: GameId;
+  snapshot?: { id: number; labels: Record<string, string> } | null;
   name?: string;
   serverType?: string;
   location?: string;
 }
 
+// I/O around the world plan: returns the new server and the DNS record name
+// the game wants.
 export const createServer = async ({
-  snapshotId,
+  game = "starbound",
+  snapshot,
   name,
   serverType,
   location,
 }: CreateServerBody) => {
   try {
     const api = await getApi();
+    const servers = await listServers();
+    const result = buildWorldPlan({
+      game,
+      name,
+      serverType,
+      location,
+      snapshot,
+      servers,
+      env: process.env,
+    });
+    if (!result.ok) throw new Error(result.error);
+    const { plan } = result;
+
     // Include all SSH keys registered in the project so the server is accessible
     const keysRes = await api.listSshKeys({});
     const sshKeys =
       keysRes.statusCode === 200 ? keysRes.body.ssh_keys.map((k) => k.id.toString()) : [];
 
-    const resolvedName = name ?? process.env.SERVER_NAME ?? "starbound";
-    const resolvedType = serverType ?? process.env.HETZNER_SERVER_TYPE ?? "cx23";
-    const resolvedLocation = location ?? process.env.HETZNER_LOCATION ?? "hel1";
-
-    const firewallId = await ensureFirewall();
+    const firewallId = await ensureFirewall(plan.firewall);
 
     const body: CreateServerRequest["body"] = {
-      name: resolvedName,
-      image: snapshotId ? snapshotId.toString() : "ubuntu-22.04",
-      server_type: resolvedType,
-      location: resolvedLocation,
+      ...plan.request,
       ssh_keys: sshKeys,
       firewalls: [{ firewall: firewallId }],
-      labels: { managed: "starbound-panel" },
     };
-
-    if (!snapshotId) {
-      const steamUser = process.env.STEAM_USER;
-      const steamPass = process.env.STEAM_PASS;
-      if (!steamUser || !steamPass) {
-        throw new Error(
-          "STEAM_USER and STEAM_PASS env vars are required for a fresh install (no snapshot found)"
-        );
-      }
-      body.user_data = buildCloudInit(steamUser, steamPass);
-    }
 
     const r = await api.createServer({ body });
     if (r.statusCode !== 201) {
       console.log("Unexpected create server response:", r.body);
       throw new Error(r.body.error.message || `Failed to create server: HTTP ${r.statusCode}`);
     }
-    const data = r.body;
-    return data;
+    return r.body;
   } catch (e) {
     throw new Error((e as Error).message, { cause: e });
   }
@@ -261,6 +223,7 @@ export const takeSnapshot = async (serverId: number) => {
         description: `starbound:${server.name}`,
         labels: {
           managed: "starbound-panel",
+          game: gameIdOf(server.labels),
           "server-name": server.name,
           "server-type": server.server_type.name,
           location: server.location.name,

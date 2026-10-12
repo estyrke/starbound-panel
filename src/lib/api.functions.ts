@@ -2,6 +2,7 @@ import { queryOptions } from "@tanstack/react-query";
 import { createServerFn } from "@tanstack/react-start";
 import { authMiddleware } from "./auth.middleware";
 import { GAMES, gameIdOf, type GameId } from "./games";
+import { getLatestFactorioVersion } from "./factorio.server";
 import { updateDns } from "./gandi.server";
 import { buildDormantList, deriveIpv6Host } from "./helpers";
 import {
@@ -45,12 +46,16 @@ export const startServerInit = createServerFn({ method: "POST" })
   )
   .handler(async ({ data }): Promise<{ serverId: number }> => {
     const snapshot = await getLatestSnapshot(data.name);
+    // Only a fresh Factorio world needs the latest version resolved up front.
+    const factorioVersion =
+      !snapshot && data.game === "factorio" ? await getLatestFactorioVersion() : null;
     const createRes = await createServer({
       name: data.name,
       game: data.game,
       snapshot,
       serverType: data.serverType,
       location: data.location,
+      factorioVersion,
     });
     if (!createRes.server) throw new Error("Failed to create server: no server data");
     return { serverId: createRes.server.id };

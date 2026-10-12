@@ -56,3 +56,75 @@ describe("buildWorldPlan", () => {
     expect(rec({ GANDI_RECORD: "play", GANDI_RECORD_STARBOUND: "sb" })).toBe("sb");
   });
 });
+
+describe("buildWorldPlan for Factorio", () => {
+  const fbase = { game: "factorio" as const, servers: [], env: {}, factorioVersion: "2.0.77" };
+
+  it("plans a Factorio new world with labels, firewall, defaults and Space-Age-off user_data", () => {
+    const r = buildWorldPlan({ ...fbase, name: "f1" });
+    if (!r.ok) throw new Error(r.error);
+    expect(r.plan.request).toMatchObject({
+      name: "f1",
+      image: "ubuntu-22.04",
+      server_type: "cx33",
+      labels: { managed: "starbound-panel", game: "factorio", "factorio-version": "2.0.77" },
+    });
+    expect(r.plan.firewall).toEqual({
+      name: "starbound-panel-factorio",
+      ports: [{ protocol: "udp", port: "34197" }],
+    });
+    expect(r.plan.dnsRecord).toBe("@");
+    const ud = r.plan.request.user_data ?? "";
+    expect(ud).toContain("get-download/2.0.77/headless/linux64");
+    expect(ud).toContain("--create");
+    for (const mod of ["space-age", "quality", "elevated-rails"]) {
+      expect(ud).toMatch(new RegExp(`"name": "${mod}",\\s*"enabled": false`));
+    }
+    expect(ud).toContain("TimeoutStopSec=");
+    expect(ud).toContain('"public": false');
+  });
+
+  it("uses Factorio-specific env for type and DNS record", () => {
+    const r = buildWorldPlan({
+      ...fbase,
+      name: "f1",
+      env: {
+        HETZNER_SERVER_TYPE: "cx99",
+        HETZNER_SERVER_TYPE_FACTORIO: "cx43",
+        GANDI_RECORD_FACTORIO: "fac",
+      },
+    });
+    if (!r.ok) throw new Error(r.error);
+    expect(r.plan.request.server_type).toBe("cx43");
+    expect(r.plan.dnsRecord).toBe("fac");
+  });
+
+  it("writes the game password and admin list from env", () => {
+    const r = buildWorldPlan({
+      ...fbase,
+      name: "f1",
+      env: { FACTORIO_GAME_PASSWORD: "it's secret", FACTORIO_ADMINS: "alice, bob" },
+    });
+    if (!r.ok) throw new Error(r.error);
+    const ud = r.plan.request.user_data ?? "";
+    expect(ud).toContain('"game_password": "it\'s secret"');
+    expect(ud).toContain('["alice","bob"]');
+  });
+
+  it("refuses a new world when the version is unresolved", () => {
+    const r = buildWorldPlan({ ...fbase, name: "f1", factorioVersion: null });
+    expect(r).toMatchObject({ ok: false, error: expect.stringContaining("version") });
+  });
+
+  it("restores from a snapshot without needing a version, keeping its version label", () => {
+    const r = buildWorldPlan({
+      ...fbase,
+      name: "f1",
+      factorioVersion: null,
+      snapshot: { id: 9, labels: { game: "factorio", "factorio-version": "2.0.70" } },
+    });
+    if (!r.ok) throw new Error(r.error);
+    expect(r.plan.request.user_data).toBeUndefined();
+    expect(r.plan.request.labels["factorio-version"]).toBe("2.0.70");
+  });
+});

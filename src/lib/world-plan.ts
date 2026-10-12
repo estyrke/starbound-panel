@@ -10,6 +10,9 @@ export interface WorldPlanInput {
   location?: string;
   // Present when restoring a dormant world from its latest snapshot.
   snapshot?: { id: number; labels: Record<string, string> } | null;
+  // Resolved concrete game version for a fresh install of a versioned game;
+  // null/absent means it couldn't be resolved.
+  factorioVersion?: string | null;
   servers: { name: string }[];
   env: Env;
 }
@@ -33,7 +36,7 @@ export type WorldPlanResult = { ok: true; plan: WorldPlan } | { ok: false; error
 export function buildWorldPlan(input: WorldPlanInput): WorldPlanResult {
   const game = GAMES[input.game];
   const { env, snapshot } = input;
-  const name = input.name ?? env.SERVER_NAME ?? "starbound";
+  const name = input.name ?? env.SERVER_NAME ?? game.id;
 
   if (input.servers.some((s) => s.name === name)) {
     return { ok: false, error: `A server named "${name}" already exists` };
@@ -45,13 +48,24 @@ export function buildWorldPlan(input: WorldPlanInput): WorldPlanResult {
   const request: WorldPlan["request"] = {
     name,
     image: snapshot ? snapshot.id.toString() : "ubuntu-22.04",
-    server_type: input.serverType ?? env.HETZNER_SERVER_TYPE ?? game.defaultServerType,
+    server_type: input.serverType ?? game.defaultServerType(env),
     location: input.location ?? env.HETZNER_LOCATION ?? "hel1",
     labels: { managed: "starbound-panel", game: game.id },
   };
 
+  if (game.versionLabel) {
+    const version = snapshot ? snapshot.labels[game.versionLabel] : input.factorioVersion;
+    if (version) request.labels[game.versionLabel] = version;
+  }
+
   if (!snapshot) {
-    const ud = game.userData(env);
+    if (game.versionLabel && !input.factorioVersion) {
+      return {
+        ok: false,
+        error: `Could not resolve the latest ${game.label} version, so a new world can't be created`,
+      };
+    }
+    const ud = game.userData(env, input.factorioVersion ?? undefined);
     if (!ud.ok) return { ok: false, error: ud.error };
     request.user_data = ud.userData;
   }

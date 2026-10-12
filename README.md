@@ -62,6 +62,7 @@ Sätt dessa under **Vercel → Project Settings → Environment Variables** (ell
 | `GANDI_DOMAIN` | DNS-zonen (domänen) | `example.com` |
 | `GANDI_RECORD` | Subdomän att uppdatera (`@` = root) | `play` |
 | `GANDI_RECORD_STARBOUND` | Subdomän för Starbound (faller tillbaka på `GANDI_RECORD`) | `play` |
+| `GANDI_RECORD_FACTORIO` | Subdomän för Factorio | `factorio` |
 
 DNS-posterna `play.example.com A` och `play.example.com AAAA` sätts automatiskt när servern startar. TTL 300 s.
 
@@ -71,6 +72,7 @@ DNS-posterna `play.example.com A` och `play.example.com AAAA` sätts automatiskt
 |----------|-------------|---------|
 | `SERVER_NAME` | Namn på servern i Hetzner | `starbound` |
 | `HETZNER_SERVER_TYPE` | Servertyp | `cx23` |
+| `HETZNER_SERVER_TYPE_FACTORIO` | Servertyp för Factorio | `cx33` |
 | `HETZNER_LOCATION` | Datacenter | `hel1` |
 | `SNAPSHOT_RETENTION_COUNT` | Antal snapshots som behålls per server | `2` |
 
@@ -121,6 +123,25 @@ journalctl -u starbound -n 50
 ```
 
 Starbound-filerna hamnar under `/home/steam/starbound/`.
+
+### Factorio (valfria)
+
+Ny Factorio-värld startas med spelet `factorio` och installerar senaste stabila headless-version (hämtas från `factorio.com/api/latest-releases`; går den inte att läsa nekas en ny värld). Space Age, Quality och Elevated Rails är avstängda. Servern är olistad och nås via spelets DNS-post på UDP 34197.
+
+| Variabel | Beskrivning |
+|----------|-------------|
+| `FACTORIO_GAME_PASSWORD` | Lösenord för att ansluta (valfritt) |
+| `FACTORIO_ADMINS` | Kommaseparerad lista med admin-användarnamn |
+
+Felsökning:
+
+```bash
+ssh root@<server-ip>
+journalctl -u factorio -n 50
+cat /var/log/cloud-init-output.log   # om installationen misslyckades
+```
+
+Filerna ligger under `/opt/factorio/`, sparfilen är `saves/world.zip`. Servern stoppas med SIGTERM så att spelet hinner spara (`TimeoutStopSec=300`). Version sparas i etiketten `factorio-version` på servrar och snapshots.
 
 ### Snapshot
 

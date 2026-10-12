@@ -1,7 +1,7 @@
 # Design: Factorio support (multi-game panel)
 
 Status: **decided, not implemented**. Decisions come from a design interview on
-2026-10-12. Terms are defined in [`CONTEXT.md`](../../CONTEXT.md).
+2026-10-12. Terms are defined in [`GLOSSARY.md`](../../GLOSSARY.md).
 
 ## Goal
 

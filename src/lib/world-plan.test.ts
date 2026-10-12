@@ -58,7 +58,7 @@ describe("buildWorldPlan", () => {
 });
 
 describe("buildWorldPlan for Factorio", () => {
-  const fbase = { game: "factorio" as const, servers: [], env: {}, factorioVersion: "2.0.77" };
+  const fbase = { game: "factorio" as const, servers: [], env: {}, gameVersion: "2.0.77" };
 
   it("plans a Factorio new world with labels, firewall, defaults and Space-Age-off user_data", () => {
     const r = buildWorldPlan({ ...fbase, name: "f1" });
@@ -112,7 +112,7 @@ describe("buildWorldPlan for Factorio", () => {
   });
 
   it("refuses a new world when the version is unresolved", () => {
-    const r = buildWorldPlan({ ...fbase, name: "f1", factorioVersion: null });
+    const r = buildWorldPlan({ ...fbase, name: "f1", gameVersion: null });
     expect(r).toMatchObject({ ok: false, error: expect.stringContaining("version") });
   });
 
@@ -120,7 +120,7 @@ describe("buildWorldPlan for Factorio", () => {
     const r = buildWorldPlan({
       ...fbase,
       name: "f1",
-      factorioVersion: null,
+      gameVersion: null,
       snapshot: { id: 9, labels: { game: "factorio", "factorio-version": "2.0.70" } },
     });
     if (!r.ok) throw new Error(r.error);

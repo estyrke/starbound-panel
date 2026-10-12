@@ -1,7 +1,13 @@
 import configureClient, { CreateServerRequest } from "@small-tech/hetzner-cloud-openapi-client";
-import { gameIdOf, type Game, type GameId } from "./games";
+import { GAMES, gameIdOf, type Game, type GameId } from "./games";
 import { selectSnapshotsToDelete } from "./helpers";
 import { buildWorldPlan } from "./world-plan";
+
+// The game's version label (e.g. factorio-version), if the server carries one.
+function versionLabelOf(labels: Record<string, string> | undefined): Record<string, string> {
+  const key = GAMES[gameIdOf(labels)].versionLabel;
+  return key && labels?.[key] ? { [key]: labels[key] } : {};
+}
 
 const HETZNER_API = "https://api.hetzner.cloud/v1/";
 
@@ -128,7 +134,7 @@ interface CreateServerBody {
   name?: string;
   serverType?: string;
   location?: string;
-  factorioVersion?: string | null;
+  gameVersion?: string | null;
 }
 
 // I/O around the world plan: returns the new server and the DNS record name
@@ -139,7 +145,7 @@ export const createServer = async ({
   name,
   serverType,
   location,
-  factorioVersion,
+  gameVersion,
 }: CreateServerBody) => {
   try {
     const api = await getApi();
@@ -150,7 +156,7 @@ export const createServer = async ({
       serverType,
       location,
       snapshot,
-      factorioVersion,
+      gameVersion,
       servers,
       env: process.env,
     });
@@ -230,9 +236,7 @@ export const takeSnapshot = async (serverId: number) => {
           "server-name": server.name,
           "server-type": server.server_type.name,
           location: server.location.name,
-          ...(server.labels?.["factorio-version"]
-            ? { "factorio-version": server.labels["factorio-version"] }
-            : {}),
+          ...versionLabelOf(server.labels),
         },
       },
     });

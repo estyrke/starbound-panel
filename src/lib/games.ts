@@ -3,7 +3,7 @@
 
 export type Env = Record<string, string | undefined>;
 
-export type GameId = "starbound";
+export type GameId = "starbound" | "factorio";
 
 export interface FirewallPort {
   protocol: "tcp" | "udp";
@@ -14,11 +14,18 @@ export interface Game {
   id: GameId;
   label: string;
   firewall: { name: string; ports: FirewallPort[] };
-  defaultServerType: string;
+  // Server type used when the caller doesn't pick one, from the environment.
+  defaultServerType: (env: Env) => string;
+  // Label key holding the installed game version, for games that track one.
+  versionLabel?: string;
   // DNS record name for this game's server, resolved from the environment.
   dnsRecord: (env: Env) => string;
   // Cloud-init for a fresh install, or a refusal reason if not possible.
-  userData: (env: Env) => { ok: true; userData: string } | { ok: false; error: string };
+  // `version` is the resolved game version for games with a versionLabel.
+  userData: (
+    env: Env,
+    version?: string
+  ) => { ok: true; userData: string } | { ok: false; error: string };
 }
 
 // Quote a string as a single shell word (safe for spaces and special characters).
@@ -72,7 +79,7 @@ const starbound: Game = {
       { protocol: "udp", port: "21025" },
     ],
   },
-  defaultServerType: "cx23",
+  defaultServerType: (env) => env.HETZNER_SERVER_TYPE ?? "cx23",
   dnsRecord: (env) => env.GANDI_RECORD_STARBOUND ?? env.GANDI_RECORD ?? "@",
   userData: (env) => {
     if (!env.STEAM_USER || !env.STEAM_PASS) {
@@ -86,7 +93,90 @@ const starbound: Game = {
   },
 };
 
-export const GAMES: Record<GameId, Game> = { starbound };
+// Cloud-init for a fresh Factorio install: headless build of `version`, a
+// default-map save, and a systemd unit whose SIGTERM stop writes the save.
+// Space Age and its dependent DLC mods are switched off.
+function factorioCloudInit(env: Env, version: string): string {
+  const password = JSON.stringify(env.FACTORIO_GAME_PASSWORD ?? "");
+  const admins = JSON.stringify(
+    (env.FACTORIO_ADMINS ?? "")
+      .split(",")
+      .map((a) => a.trim())
+      .filter(Boolean)
+  );
+  const settings = `{
+  "name": "Factorio",
+  "description": "",
+  "visibility": { "public": false, "lan": true },
+  "game_password": ${password},
+  "require_user_verification": false,
+  "autosave_interval": 10,
+  "autosave_only_on_server": true
+}`;
+  const mods = ["base", "space-age", "quality", "elevated-rails"]
+    .map((n) => `{ "name": "${n}", "enabled": ${n === "base"} }`)
+    .join(",\n    ");
+  const modList = `{
+  "mods": [
+    ${mods}
+  ]
+}`;
+  return `#!/bin/bash
+set -e
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -y
+apt-get install -y xz-utils curl
+useradd -m -s /bin/bash factorio 2>/dev/null || true
+curl -fL https://factorio.com/get-download/${version}/headless/linux64 | tar -xJ -C /opt
+mkdir -p /opt/factorio/saves /opt/factorio/mods
+cat > /opt/factorio/server-settings.json << 'JSON'
+${settings}
+JSON
+cat > /opt/factorio/server-adminlist.json << 'JSON'
+${admins}
+JSON
+cat > /opt/factorio/mods/mod-list.json << 'JSON'
+${modList}
+JSON
+chown -R factorio:factorio /opt/factorio
+su factorio -c '/opt/factorio/bin/x64/factorio --create /opt/factorio/saves/world.zip'
+cat > /etc/systemd/system/factorio.service << 'SERVICE'
+[Unit]
+Description=Factorio Headless Server
+After=network.target
+
+[Service]
+User=factorio
+WorkingDirectory=/opt/factorio
+ExecStart=/opt/factorio/bin/x64/factorio --start-server /opt/factorio/saves/world.zip --server-settings /opt/factorio/server-settings.json --server-adminlist /opt/factorio/server-adminlist.json
+KillSignal=SIGTERM
+TimeoutStopSec=300
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+SERVICE
+systemctl daemon-reload
+systemctl enable factorio
+systemctl start factorio
+`;
+}
+
+const factorio: Game = {
+  id: "factorio",
+  label: "Factorio",
+  firewall: { name: "starbound-panel-factorio", ports: [{ protocol: "udp", port: "34197" }] },
+  defaultServerType: (env) => env.HETZNER_SERVER_TYPE_FACTORIO ?? "cx33",
+  versionLabel: "factorio-version",
+  dnsRecord: (env) => env.GANDI_RECORD_FACTORIO ?? "@",
+  userData: (env, version) => {
+    if (!version) return { ok: false, error: "Factorio version is required for a fresh install" };
+    return { ok: true, userData: factorioCloudInit(env, version) };
+  },
+};
+
+export const GAMES: Record<GameId, Game> = { starbound, factorio };
 
 export const DEFAULT_GAME: GameId = "starbound";
 

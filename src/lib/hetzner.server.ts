@@ -128,6 +128,7 @@ interface CreateServerBody {
   name?: string;
   serverType?: string;
   location?: string;
+  factorioVersion?: string | null;
 }
 
 // I/O around the world plan: returns the new server and the DNS record name
@@ -138,6 +139,7 @@ export const createServer = async ({
   name,
   serverType,
   location,
+  factorioVersion,
 }: CreateServerBody) => {
   try {
     const api = await getApi();
@@ -148,6 +150,7 @@ export const createServer = async ({
       serverType,
       location,
       snapshot,
+      factorioVersion,
       servers,
       env: process.env,
     });
@@ -220,13 +223,16 @@ export const takeSnapshot = async (serverId: number) => {
       path: { id: serverId },
       body: {
         type: "snapshot",
-        description: `starbound:${server.name}`,
+        description: `${gameIdOf(server.labels)}:${server.name}`,
         labels: {
           managed: "starbound-panel",
           game: gameIdOf(server.labels),
           "server-name": server.name,
           "server-type": server.server_type.name,
           location: server.location.name,
+          ...(server.labels?.["factorio-version"]
+            ? { "factorio-version": server.labels["factorio-version"] }
+            : {}),
         },
       },
     });

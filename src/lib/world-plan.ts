@@ -12,7 +12,7 @@ export interface WorldPlanInput {
   snapshot?: { id: number; labels: Record<string, string> } | null;
   // Resolved concrete game version for a fresh install of a versioned game;
   // null/absent means it couldn't be resolved.
-  factorioVersion?: string | null;
+  gameVersion?: string | null;
   servers: { name: string }[];
   env: Env;
 }
@@ -54,18 +54,18 @@ export function buildWorldPlan(input: WorldPlanInput): WorldPlanResult {
   };
 
   if (game.versionLabel) {
-    const version = snapshot ? snapshot.labels[game.versionLabel] : input.factorioVersion;
+    const version = snapshot ? snapshot.labels[game.versionLabel] : input.gameVersion;
     if (version) request.labels[game.versionLabel] = version;
   }
 
   if (!snapshot) {
-    if (game.versionLabel && !input.factorioVersion) {
+    if (game.versionLabel && !input.gameVersion) {
       return {
         ok: false,
         error: `Could not resolve the latest ${game.label} version, so a new world can't be created`,
       };
     }
-    const ud = game.userData(env, input.factorioVersion ?? undefined);
+    const ud = game.userData(env, input.gameVersion ?? undefined);
     if (!ud.ok) return { ok: false, error: ud.error };
     request.user_data = ud.userData;
   }

@@ -47,7 +47,7 @@ export const startServerInit = createServerFn({ method: "POST" })
   .handler(async ({ data }): Promise<{ serverId: number }> => {
     const snapshot = await getLatestSnapshot(data.name);
     // Only a fresh Factorio world needs the latest version resolved up front.
-    const factorioVersion =
+    const gameVersion =
       !snapshot && data.game === "factorio" ? await getLatestFactorioVersion() : null;
     const createRes = await createServer({
       name: data.name,
@@ -55,7 +55,7 @@ export const startServerInit = createServerFn({ method: "POST" })
       snapshot,
       serverType: data.serverType,
       location: data.location,
-      factorioVersion,
+      gameVersion,
     });
     if (!createRes.server) throw new Error("Failed to create server: no server data");
     return { serverId: createRes.server.id };

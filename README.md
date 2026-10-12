@@ -61,6 +61,7 @@ Sätt dessa under **Vercel → Project Settings → Environment Variables** (ell
 | `GANDI_API_KEY` | API-nyckel från Gandi → User Settings → Security | |
 | `GANDI_DOMAIN` | DNS-zonen (domänen) | `example.com` |
 | `GANDI_RECORD` | Subdomän att uppdatera (`@` = root) | `play` |
+| `GANDI_RECORD_STARBOUND` | Subdomän för Starbound (faller tillbaka på `GANDI_RECORD`) | `play` |
 
 DNS-posterna `play.example.com A` och `play.example.com AAAA` sätts automatiskt när servern startar. TTL 300 s.
 

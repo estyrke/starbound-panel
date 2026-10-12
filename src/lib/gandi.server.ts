@@ -19,6 +19,7 @@ async function putRecord(
 }
 
 interface UpdateDnsBody {
+  record: string;
   ip: string;
   ipv6: string;
 }
@@ -28,11 +29,10 @@ export const updateDns = async (
 ): Promise<{ success: boolean; ip: string; ipv6: string; record: string }> => {
   const apiKey = process.env.GANDI_API_KEY;
   const domain = process.env.GANDI_DOMAIN;
-  const record = process.env.GANDI_RECORD ?? "@";
 
   if (!apiKey || !domain) throw new Error("GANDI_API_KEY and GANDI_DOMAIN env vars are required");
 
-  const { ip, ipv6 } = data;
+  const { ip, ipv6, record } = data;
 
   try {
     const updates: Promise<void>[] = [];

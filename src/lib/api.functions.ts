@@ -1,6 +1,7 @@
 import { queryOptions } from "@tanstack/react-query";
 import { createServerFn } from "@tanstack/react-start";
 import { authMiddleware } from "./auth.middleware";
+import { GAMES, gameIdOf, type GameId } from "./games";
 import { updateDns } from "./gandi.server";
 import { buildDormantList, deriveIpv6Host } from "./helpers";
 import {
@@ -39,12 +40,15 @@ export const listAllQueryOptions = () =>
 
 export const startServerInit = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
-  .inputValidator((data: { name: string; serverType?: string; location?: string }) => data)
+  .inputValidator(
+    (data: { name: string; game?: GameId; serverType?: string; location?: string }) => data
+  )
   .handler(async ({ data }): Promise<{ serverId: number }> => {
     const snapshot = await getLatestSnapshot(data.name);
     const createRes = await createServer({
       name: data.name,
-      snapshotId: snapshot?.id,
+      game: data.game,
+      snapshot,
       serverType: data.serverType,
       location: data.location,
     });
@@ -106,7 +110,8 @@ export const updateDnsForServer = createServerFn({ method: "POST" })
     const ip = server?.public_net.ipv4?.ip;
     const ipv6 = deriveIpv6Host(server?.public_net.ipv6?.ip);
     if (!ip || !ipv6) return null;
-    const res = await updateDns({ ip, ipv6 });
+    const record = GAMES[gameIdOf(server?.labels)].dnsRecord(process.env);
+    const res = await updateDns({ record, ip, ipv6 });
     return { record: res.record, ip: res.ip, ipv6: res.ipv6 };
   });
 

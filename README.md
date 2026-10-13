@@ -106,6 +106,24 @@ pnpm lint       # eslint
 pnpm test       # vitest
 ```
 
+### Lokalt med fejkade API:er
+
+För att prova GUI och flöden utan att röra Hetzner, Gandi eller factorio.com:
+
+```bash
+pnpm dev:fake   # panel på http://localhost:3000, lösenord: fake
+```
+
+Kommandot startar en lokal fejkserver (port 4010) tillsammans med dev-servern och sätter engångsvärden för alla nycklar, så ingen `.env` behövs och riktiga nycklar kan aldrig användas av misstag. Fejkserverna:
+
+- **Hetzner**: stateful i minnet. Servrar går `initializing` → `running`, avstängning ger `off`, snapshots blir tillgängliga efter några sekunder. Startar med en levande Starbound-server (`starbound`) och en sovande Factorio-värld (`factory`, äldre version).
+- **Gandi**: lagrar A/AAAA-poster i minnet och loggar varje uppdatering. Aktuella poster: `http://127.0.0.1:4010/gandi/_debug/records`.
+- **factorio.com**: svarar på `latest-releases` med en fast version.
+
+Ingen riktig spelserver körs. Tillståndet nollställs vid varje omstart. Justera hastigheten med `FAKE_ACTION_DELAY_MS` (standard 2500) och porten med `FAKE_UPSTREAMS_PORT`.
+
+Panelen läser bas-URL:erna från `HETZNER_API_URL`, `GANDI_API_URL` och `FACTORIO_API_URL`; utan dem används de riktiga tjänsterna.
+
 ## Felsökning
 
 ### Cloud-init / första installation

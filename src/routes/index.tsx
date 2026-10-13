@@ -12,6 +12,8 @@ import type {
   DormantEntity,
   PendingEntity,
 } from "../lib/types.js";
+import { GAMES, gameIdOf, type GameId } from "../lib/games.js";
+import { validateWorldName } from "../lib/helpers.js";
 import {
   sendAction,
   listAllQueryOptions,
@@ -120,7 +122,7 @@ function LoginForm() {
       <header className={styles.header}>
         <div className={styles.logo}>
           <span className={styles.logoIcon}>⬡</span>
-          <span>STARBOUND</span>
+          <span>GAME</span>
           <span className={styles.logoDim}>CONTROL</span>
         </div>
       </header>
@@ -178,8 +180,8 @@ function App() {
     setLog((prev) => [`[${ts()}] ${msg}`, ...prev].slice(0, 50));
   }, []);
 
-  const setOp = (name: string, phase: OpPhase, label: string) =>
-    setOpState((s) => ({ ...s, [name]: { phase, label } }));
+  const setOp = (name: string, phase: OpPhase, label: string, game?: GameId) =>
+    setOpState((s) => ({ ...s, [name]: { phase, label, game: game ?? s[name]?.game } }));
   const clearOp = (name: string) =>
     setOpState((s) => {
       const next = { ...s };
@@ -192,12 +194,13 @@ function App() {
   const doStop = useCallback(
     async (server: HetznerServer) => {
       const { name, id } = server;
+      const game = gameIdOf(server.labels);
       addLog(`Sparar och stänger av ${name}…`);
       try {
         await runStopFlow(
           { stopServerInit, getServerStatus, snapshotServer, getActionStatus, deleteServerById },
           { serverId: id },
-          (phase) => setOp(name, phase, STOP_LABELS[phase])
+          (phase) => setOp(name, phase, STOP_LABELS[phase], game)
         );
 
         addLog(`✓ ${name} sparad och stängd`);
@@ -215,10 +218,12 @@ function App() {
   const doStart = useCallback(
     async ({
       name,
+      game,
       serverType,
       location,
     }: {
       name: string;
+      game: GameId;
       serverType?: string;
       location?: string;
     }) => {
@@ -226,8 +231,8 @@ function App() {
       try {
         const res = await runStartFlow(
           { startServerInit, getServerStatus, updateDnsForServer },
-          { name, serverType, location },
-          (phase) => setOp(name, phase, START_LABELS[phase])
+          { name, game, serverType, location },
+          (phase) => setOp(name, phase, START_LABELS[phase], game)
         );
 
         if (res.dnsRecord) {
@@ -281,14 +286,16 @@ function App() {
         server,
         snapshot: null,
         name: server.name,
+        game: gameIdOf(server.labels),
       })),
       ...dormantServers
         .filter(({ name }) => !opState[name])
-        .map(({ name, snapshot, serverType, location }) => ({
+        .map(({ name, game, snapshot, serverType, location }) => ({
           type: "dormant" as const,
           key: `dormant-${snapshot.id}`,
           snapshot,
           name,
+          game,
           serverType,
           location,
         })),
@@ -296,21 +303,28 @@ function App() {
 
     for (const [name, op] of Object.entries(opState)) {
       if (!liveNames.has(name)) {
-        result.push({ type: "pending", key: `pending-${name}`, name, op });
+        result.push({
+          type: "pending",
+          key: `pending-${name}`,
+          name,
+          game: op.game ?? gameIdOf(undefined),
+          op,
+        });
       }
     }
 
     return result;
   }, [data, opState]);
 
-  const showFresh = !isLoading && entities.length === 0;
+  // Names a new world can't reuse: live, dormant and in-progress worlds.
+  const takenNames = useMemo(() => entities.map((e) => e.name), [entities]);
 
   return (
     <div className={styles.layout}>
       <header className={styles.header}>
         <div className={styles.logo}>
           <span className={styles.logoIcon}>⬡</span>
-          <span>STARBOUND</span>
+          <span>GAME</span>
           <span className={styles.logoDim}>CONTROL</span>
         </div>
         <div className={styles.headerActions}>
@@ -342,52 +356,63 @@ function App() {
               <div className={styles.spinner} />
               <p>Ansluter till Hetzner Cloud…</p>
             </div>
-          ) : showFresh ? (
-            <FreshCard onStart={() => doStart({ name: "starbound" })} />
           ) : (
-            entities.map((entity) => {
-              if (entity.type === "live") {
-                const e = entity as LiveEntity;
-                const op = opState[e.name];
-                const isBusy =
-                  !!op || ["starting", "stopping", "rebuilding"].includes(e.server.status);
-                return (
-                  <LiveCard
-                    key={e.key}
-                    server={e.server}
-                    op={op}
-                    isBusy={isBusy}
-                    onStop={() => doStop(e.server)}
-                    onReboot={() => doAction(e.server, "reboot")}
-                    onPowerOn={() => doAction(e.server, "poweron")}
-                  />
-                );
-              }
-              if (entity.type === "dormant") {
-                const e = entity as DormantEntity;
-                return (
-                  <DormantCard
-                    key={e.key}
-                    name={e.name}
-                    serverType={e.serverType}
-                    location={e.location}
-                    snapshot={e.snapshot}
-                    onStart={() =>
-                      doStart({
-                        name: e.name,
-                        serverType: e.serverType,
-                        location: e.location,
-                      })
-                    }
-                  />
-                );
-              }
-              if (entity.type === "pending") {
-                const e = entity as PendingEntity;
-                return <PendingCard key={e.key} name={e.name} op={e.op} />;
-              }
-              return null;
-            })
+            [
+              ...entities.map((entity) => {
+                if (entity.type === "live") {
+                  const e = entity as LiveEntity;
+                  const op = opState[e.name];
+                  const isBusy =
+                    !!op || ["starting", "stopping", "rebuilding"].includes(e.server.status);
+                  return (
+                    <LiveCard
+                      key={e.key}
+                      server={e.server}
+                      game={e.game}
+                      op={op}
+                      isBusy={isBusy}
+                      onStop={() => doStop(e.server)}
+                      onReboot={() => doAction(e.server, "reboot")}
+                      onPowerOn={() => doAction(e.server, "poweron")}
+                    />
+                  );
+                }
+                if (entity.type === "dormant") {
+                  const e = entity as DormantEntity;
+                  return (
+                    <DormantCard
+                      key={e.key}
+                      name={e.name}
+                      game={e.game}
+                      serverType={e.serverType}
+                      location={e.location}
+                      snapshot={e.snapshot}
+                      onStart={() =>
+                        doStart({
+                          name: e.name,
+                          game: e.game,
+                          serverType: e.serverType,
+                          location: e.location,
+                        })
+                      }
+                    />
+                  );
+                }
+                if (entity.type === "pending") {
+                  const e = entity as PendingEntity;
+                  return <PendingCard key={e.key} name={e.name} game={e.game} op={e.op} />;
+                }
+                return null;
+              }),
+              ...Object.values(GAMES).map((g) => (
+                <NewWorldCard
+                  key={`new-${g.id}`}
+                  game={g.id}
+                  takenNames={takenNames}
+                  onCreate={(name) => doStart({ name, game: g.id })}
+                />
+              )),
+            ]
           )}
         </div>
 
@@ -421,6 +446,7 @@ function App() {
 
 interface LiveCardProps {
   server: HetznerServer;
+  game: GameId;
   op?: OpState;
   isBusy: boolean;
   onStop: () => void;
@@ -428,7 +454,7 @@ interface LiveCardProps {
   onPowerOn: () => void;
 }
 
-function LiveCard({ server, op, isBusy, onStop, onReboot, onPowerOn }: LiveCardProps) {
+function LiveCard({ server, game, op, isBusy, onStop, onReboot, onPowerOn }: LiveCardProps) {
   const isOn = server.status === "running";
   const statusColor = op ? "var(--yellow)" : (STATUS_COLOR[server.status] ?? "var(--text-dim)");
   const statusLabel = op
@@ -439,7 +465,9 @@ function LiveCard({ server, op, isBusy, onStop, onReboot, onPowerOn }: LiveCardP
     <div className={`${styles.card} ${isOn && !op ? styles.cardOn : ""}`}>
       <div className={styles.cardTop}>
         <div>
-          <div className={styles.serverName}>{server.name}</div>
+          <div className={styles.serverName}>
+            {server.name} <GameBadge game={game} />
+          </div>
           <div className={styles.serverMeta}>
             {server.server_type.name} · {server.location.name.toUpperCase()}
           </div>
@@ -454,7 +482,7 @@ function LiveCard({ server, op, isBusy, onStop, onReboot, onPowerOn }: LiveCardP
         <Stat label="IP" value={server.public_net.ipv4?.ip ?? "—"} mono />
         <Stat label="CPU" value={`${server.server_type.cores} vCPU`} />
         <Stat label="RAM" value={`${server.server_type.memory} GB`} />
-        <Stat label="PORT" value="21025" mono />
+        <Stat label="PORT" value={GAMES[game].firewall.ports[0].port} mono />
       </div>
 
       <div className={styles.cardActions}>
@@ -497,18 +525,21 @@ function LiveCard({ server, op, isBusy, onStop, onReboot, onPowerOn }: LiveCardP
 
 interface DormantCardProps {
   name: string;
+  game: GameId;
   serverType?: string;
   location?: string;
   snapshot: HetznerImage;
   onStart: () => void;
 }
 
-function DormantCard({ name, serverType, location, snapshot, onStart }: DormantCardProps) {
+function DormantCard({ name, game, serverType, location, snapshot, onStart }: DormantCardProps) {
   return (
     <div className={`${styles.card} ${styles.cardDormant}`}>
       <div className={styles.cardTop}>
         <div>
-          <div className={styles.serverName}>{name}</div>
+          <div className={styles.serverName}>
+            {name} <GameBadge game={game} />
+          </div>
           <div className={styles.serverMeta}>
             {serverType ?? "—"} · {location?.toUpperCase() ?? "—"}
           </div>
@@ -539,15 +570,18 @@ function DormantCard({ name, serverType, location, snapshot, onStart }: DormantC
 
 interface PendingCardProps {
   name: string;
+  game: GameId;
   op: OpState;
 }
 
-function PendingCard({ name, op }: PendingCardProps) {
+function PendingCard({ name, game, op }: PendingCardProps) {
   return (
     <div className={styles.card}>
       <div className={styles.cardTop}>
         <div>
-          <div className={styles.serverName}>{name}</div>
+          <div className={styles.serverName}>
+            {name} <GameBadge game={game} />
+          </div>
           <div className={styles.serverMeta}>—</div>
         </div>
         <div className={styles.statusBadge} style={{ color: "var(--yellow)" }}>
@@ -560,7 +594,7 @@ function PendingCard({ name, op }: PendingCardProps) {
         <Stat label="IP" value="—" mono />
         <Stat label="CPU" value="—" />
         <Stat label="RAM" value="—" />
-        <Stat label="PORT" value="21025" mono />
+        <Stat label="PORT" value={GAMES[game].firewall.ports[0].port} mono />
       </div>
 
       <div className={styles.cardActions}>
@@ -572,38 +606,68 @@ function PendingCard({ name, op }: PendingCardProps) {
   );
 }
 
-function FreshCard({ onStart }: { onStart: () => void }) {
+const NEW_WORLD_INFO: Record<GameId, string> = {
+  starbound:
+    "Startar en ny server och installerar Starbound via SteamCMD (kräver STEAM_USER + STEAM_PASS)",
+  factorio: "Startar en ny server med Factorio och standardkarta",
+};
+
+interface NewWorldCardProps {
+  game: GameId;
+  takenNames: string[];
+  onCreate: (name: string) => void;
+}
+
+function NewWorldCard({ game, takenNames, onCreate }: NewWorldCardProps) {
+  const [name, setName] = useState("");
+  const [touched, setTouched] = useState(false);
+  const error = validateWorldName(name, takenNames);
+
+  const submit = (e: React.FormEvent) => {
+    e.preventDefault();
+    setTouched(true);
+    if (error) return;
+    onCreate(name.trim());
+    setName("");
+    setTouched(false);
+  };
+
   return (
-    <div className={`${styles.card} ${styles.cardFresh}`}>
+    <form className={`${styles.card} ${styles.cardFresh}`} onSubmit={submit}>
       <div className={styles.cardTop}>
         <div>
-          <div className={styles.serverName}>starbound</div>
-          <div className={styles.serverMeta}>Ingen server eller snapshot hittades</div>
-        </div>
-        <div className={styles.statusBadge} style={{ color: "var(--text-dim)" }}>
-          <span className={styles.statusDot} style={{ background: "var(--text-dim)" }} />
-          INAKTIV
+          <div className={styles.serverName}>
+            NY VÄRLD <GameBadge game={game} />
+          </div>
+          <div className={styles.serverMeta}>{NEW_WORLD_INFO[game]}</div>
         </div>
       </div>
 
-      <div className={styles.cardStats}>
-        <div className={`${styles.stat} ${styles.statWide}`}>
-          <span className={styles.statLabel}>INFO</span>
-          <span className={styles.statValue}>
-            Startar en ny server och installerar Starbound via SteamCMD (kräver STEAM_USER +
-            STEAM_PASS)
-          </span>
-        </div>
-      </div>
+      <input
+        className={styles.loginInput}
+        type="text"
+        name={`new-world-${game}`}
+        aria-label={`Namn på ny ${GAMES[game].label}-värld`}
+        placeholder="VÄRLDENS NAMN"
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+        onBlur={() => setTouched(name.length > 0)}
+        autoComplete="off"
+      />
+      {touched && error && <div className={styles.errorBanner}>⚠ {error}</div>}
 
       <div className={styles.cardActions}>
-        <ActionBtn label="NYTT SPEL" icon="◆" color="var(--accent)" onClick={onStart} wide />
+        <ActionBtn label="NY VÄRLD" icon="◆" color="var(--accent)" disabled={!!error} wide />
       </div>
-    </div>
+    </form>
   );
 }
 
 // ── Shared primitives ─────────────────────────────────────────────────────────
+
+function GameBadge({ game }: { game: GameId }) {
+  return <span className={styles.gameBadge}>{GAMES[game].label.toUpperCase()}</span>;
+}
 
 interface StatProps {
   label: string;

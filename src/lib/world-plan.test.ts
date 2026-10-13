@@ -47,6 +47,28 @@ describe("buildWorldPlan", () => {
     expect(r.ok).toBe(false);
   });
 
+  describe("one live world per game", () => {
+    const live = (name: string, game?: string) => ({
+      name,
+      labels: game ? { game } : ({} as Record<string, string>),
+    });
+
+    it("refuses a start when the same game already has a live world", () => {
+      const r = buildWorldPlan({ ...base, name: "w2", servers: [live("w1", "starbound")] });
+      expect(r).toMatchObject({ ok: false, error: expect.stringContaining("spara") });
+    });
+
+    it("counts a legacy unlabelled server as Starbound", () => {
+      const r = buildWorldPlan({ ...base, name: "w2", servers: [live("old")] });
+      expect(r.ok).toBe(false);
+    });
+
+    it("allows a start when only the other game is live", () => {
+      const r = buildWorldPlan({ ...base, name: "w2", servers: [live("f1", "factorio")] });
+      expect(r.ok).toBe(true);
+    });
+  });
+
   it("resolves the DNS record per game, falling back to GANDI_RECORD", () => {
     const rec = (e: Record<string, string>) => {
       const r = buildWorldPlan({ ...base, name: "w", env: { ...env, ...e } });

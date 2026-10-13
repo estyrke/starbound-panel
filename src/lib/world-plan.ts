@@ -13,7 +13,8 @@ export interface WorldPlanInput {
   // Resolved concrete game version for a fresh install of a versioned game;
   // null/absent means it couldn't be resolved.
   gameVersion?: string | null;
-  servers: { name: string }[];
+  // Live servers; labels decide which game each one occupies.
+  servers: { name: string; labels?: Record<string, string> }[];
   env: Env;
 }
 
@@ -40,6 +41,13 @@ export function buildWorldPlan(input: WorldPlanInput): WorldPlanResult {
 
   if (input.servers.some((s) => s.name === name)) {
     return { ok: false, error: `A server named "${name}" already exists` };
+  }
+  // Both worlds would claim the game's DNS record, so one live world per game.
+  if (input.servers.some((s) => gameIdOf(s.labels) === game.id)) {
+    return {
+      ok: false,
+      error: `Det finns redan en live-värld för ${game.label} – spara och stäng av den först`,
+    };
   }
   if (snapshot && gameIdOf(snapshot.labels) !== game.id) {
     return { ok: false, error: `Snapshot belongs to a different game than ${game.label}` };

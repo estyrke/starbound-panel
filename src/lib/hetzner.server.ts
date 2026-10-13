@@ -10,6 +10,8 @@ function versionLabelOf(labels: Record<string, string> | undefined): Record<stri
 }
 
 const HETZNER_API = "https://api.hetzner.cloud/v1/";
+// Overridable so `pnpm dev:fake` can point the panel at the local fake upstreams.
+const hetznerApiUrl = () => process.env.HETZNER_API_URL ?? HETZNER_API;
 
 let apiPromise: ReturnType<typeof configureClient> | null = null;
 
@@ -22,7 +24,7 @@ function getApi() {
     // forwards only `getHeaders` to massimo — a plain `headers` option is
     // silently dropped, so we must pass getHeaders despite the types.
     apiPromise = configureClient({
-      url: HETZNER_API,
+      url: hetznerApiUrl(),
       getHeaders: async () => ({ Authorization: `Bearer ${token}` }),
     } as Parameters<typeof configureClient>[0]);
   }

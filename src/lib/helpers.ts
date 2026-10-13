@@ -21,7 +21,8 @@ export function buildDormantList(
 
   const latestSnap: Record<string, HetznerImage> = {};
   for (const snap of snapshots) {
-    const name = snap.labels["server-name"] ?? snap.description.replace(/^(starbound|factorio):/, "");
+    const name =
+      snap.labels["server-name"] ?? snap.description.replace(/^(starbound|factorio):/, "");
     if (!latestSnap[name] || new Date(snap.created) > new Date(latestSnap[name].created)) {
       latestSnap[name] = snap;
     }

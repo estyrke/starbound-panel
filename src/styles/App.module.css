@@ -372,3 +372,17 @@
 .footerDot {
   color: var(--border);
 }
+
+.gameBadge {
+  display: inline-block;
+  margin-left: 0.4rem;
+  padding: 0.1rem 0.4rem;
+  border: 1px solid var(--text-dim);
+  border-radius: 3px;
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--text-dim);
+  vertical-align: middle;
+}

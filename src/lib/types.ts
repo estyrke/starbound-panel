@@ -1,3 +1,5 @@
+import type { GameId } from "./games";
+
 export type HetznerServer = {
   id: number;
   name: string;
@@ -14,6 +16,7 @@ export type HetznerServer = {
 
 export type DormantServer = {
   name: string;
+  game: GameId;
   snapshot: HetznerImage;
   serverType?: string;
   location?: string;
@@ -41,10 +44,12 @@ export type OpPhase = StartPhase | StopPhase | "reboot" | "poweron";
 export interface OpState {
   phase: OpPhase;
   label: string;
+  game?: GameId;
 }
 
 export interface StartParams {
   name: string;
+  game?: GameId;
   serverType?: string;
   location?: string;
   snapshotId?: number;
@@ -58,6 +63,7 @@ export interface LiveEntity {
   server: HetznerServer;
   snapshot: HetznerImage | null;
   name: string;
+  game: GameId;
 }
 
 export interface DormantEntity {
@@ -65,6 +71,7 @@ export interface DormantEntity {
   key: string;
   snapshot: HetznerImage;
   name: string;
+  game: GameId;
   serverType?: string;
   location?: string;
 }
@@ -73,6 +80,7 @@ export interface PendingEntity {
   type: "pending";
   key: string;
   name: string;
+  game: GameId;
   op: OpState;
 }
 

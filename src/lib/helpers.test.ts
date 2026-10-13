@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { buildDormantList, deriveIpv6Host, selectSnapshotsToDelete } from "./helpers";
+import {
+  buildDormantList,
+  deriveIpv6Host,
+  selectSnapshotsToDelete,
+  validateWorldName,
+} from "./helpers";
 import type { HetznerImage } from "./types";
 
 describe("deriveIpv6Host", () => {
@@ -64,6 +69,57 @@ describe("buildDormantList", () => {
     );
     expect(result[0].serverType).toBe("cx23");
     expect(result[0].location).toBe("hel1");
+  });
+});
+
+describe("buildDormantList game", () => {
+  it("reads the game from the snapshot's game label", () => {
+    const result = buildDormantList(
+      [],
+      [snap({ id: 1, labels: { "server-name": "f", game: "factorio" } })]
+    );
+    expect(result[0].game).toBe("factorio");
+  });
+
+  it("treats a legacy snapshot without a game label as Starbound", () => {
+    const result = buildDormantList([], [snap({ id: 1, labels: { "server-name": "old" } })]);
+    expect(result[0].game).toBe("starbound");
+  });
+
+  it("strips the game prefix from the description fallback", () => {
+    const result = buildDormantList([], [snap({ id: 1, description: "factorio:fab" })]);
+    expect(result[0].name).toBe("fab");
+  });
+});
+
+describe("validateWorldName", () => {
+  it("accepts a valid hostname-style name", () => {
+    expect(validateWorldName("my-world-2", [])).toBeNull();
+  });
+
+  it("rejects an empty name", () => {
+    expect(validateWorldName("", [])).not.toBeNull();
+    expect(validateWorldName("   ", [])).not.toBeNull();
+  });
+
+  it("rejects characters Hetzner doesn't allow", () => {
+    expect(validateWorldName("My World", [])).not.toBeNull();
+    expect(validateWorldName("under_score", [])).not.toBeNull();
+    expect(validateWorldName("åäö", [])).not.toBeNull();
+  });
+
+  it("rejects names starting or ending with a hyphen", () => {
+    expect(validateWorldName("-a", [])).not.toBeNull();
+    expect(validateWorldName("a-", [])).not.toBeNull();
+  });
+
+  it("rejects names longer than 63 characters", () => {
+    expect(validateWorldName("a".repeat(64), [])).not.toBeNull();
+    expect(validateWorldName("a".repeat(63), [])).toBeNull();
+  });
+
+  it("rejects a name that clashes with an existing world", () => {
+    expect(validateWorldName("alpha", ["alpha", "beta"])).toMatch(/finns redan/);
   });
 });
 

@@ -2,6 +2,8 @@
 // a short server-function round trip, so no single HTTP request has to outlive
 // a serverless function timeout. Dependencies are injected for testability.
 
+import type { GameId } from "./games";
+
 export type StartPhase = "creating" | "waiting-running" | "dns";
 export type StopPhase = "shutting-down" | "waiting-off" | "snapshotting" | "deleting";
 
@@ -30,7 +32,7 @@ interface ServerStatus {
 
 export interface StartFlowDeps {
   startServerInit: (args: {
-    data: { name: string; serverType?: string; location?: string };
+    data: { name: string; game?: GameId; serverType?: string; location?: string };
   }) => Promise<{ serverId: number }>;
   getServerStatus: (args: { data: { serverId: number } }) => Promise<ServerStatus | null>;
   updateDnsForServer: (args: {
@@ -46,7 +48,7 @@ export interface StartFlowResult {
 
 export async function runStartFlow(
   deps: StartFlowDeps,
-  params: { name: string; serverType?: string; location?: string },
+  params: { name: string; game?: GameId; serverType?: string; location?: string },
   onPhase: (phase: StartPhase) => void,
   pollOptions?: PollOptions
 ): Promise<StartFlowResult> {

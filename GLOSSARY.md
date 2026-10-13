@@ -16,5 +16,8 @@
   binaries to a newer version. See `docs/design/factorio-support.md` D8.
 - **Game DNS record**: the per-game Gandi record (`GANDI_RECORD_<GAME>`) that
   points at that game's single live server.
+- **Fake upstreams**: a local stand-in for the external services the panel
+  talks to (Hetzner, Gandi, factorio.com), used to try out the panel without
+  touching production. No real game server ever runs behind them.
 
 Design decisions: [`docs/design/`](docs/design/).

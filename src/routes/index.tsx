@@ -127,9 +127,23 @@ function LoginForm() {
       <main className={styles.main}>
         <form className={`${styles.card} ${styles.loginCard}`} onSubmit={submit}>
           <div className={styles.serverName}>INLOGGNING</div>
+          {/* Password managers look for a username field to anchor the credential. */}
+          <input
+            type="text"
+            name="username"
+            autoComplete="username"
+            defaultValue="panel"
+            tabIndex={-1}
+            aria-hidden="true"
+            style={{ display: "none" }}
+          />
           <input
             className={styles.loginInput}
             type="password"
+            name="password"
+            id="password"
+            autoComplete="current-password"
+            aria-label="Lösenord"
             placeholder="LÖSENORD"
             value={password}
             onChange={(e) => setPassword(e.target.value)}

@@ -92,6 +92,24 @@ function stopDeps(overrides: Partial<StopFlowDeps> = {}): StopFlowDeps {
   };
 }
 
+describe("runStartFlow refusal", () => {
+  it("fails the start with the refusal message before waiting on anything", async () => {
+    const msg = "Det finns redan en live-värld för Starbound – spara och stäng av den först";
+    const deps = startDeps({
+      startServerInit: vi.fn(async () => {
+        throw new Error(msg);
+      }),
+    });
+    const phases: string[] = [];
+
+    await expect(runStartFlow(deps, { name: "w2" }, (p) => phases.push(p), fast)).rejects.toThrow(
+      msg
+    );
+    expect(phases).toEqual(["creating"]);
+    expect(deps.getServerStatus).not.toHaveBeenCalled();
+  });
+});
+
 describe("runStopFlow", () => {
   it("runs shutdown, snapshot, and delete in order", async () => {
     const phases: string[] = [];

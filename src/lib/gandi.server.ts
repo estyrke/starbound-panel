@@ -1,4 +1,6 @@
 const GANDI_API = "https://api.gandi.net/v5/livedns";
+// Overridable so `pnpm dev:fake` can point the panel at the local fake upstreams.
+const gandiApiUrl = () => process.env.GANDI_API_URL ?? GANDI_API;
 
 async function putRecord(
   apiKey: string,
@@ -7,7 +9,7 @@ async function putRecord(
   type: "A" | "AAAA",
   value: string
 ): Promise<void> {
-  const r = await fetch(`${GANDI_API}/domains/${domain}/records/${record}/${type}`, {
+  const r = await fetch(`${gandiApiUrl()}/domains/${domain}/records/${record}/${type}`, {
     method: "PUT",
     headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
     body: JSON.stringify({ rrset_values: [value], rrset_ttl: 300 }),

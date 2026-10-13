@@ -1,6 +1,8 @@
 // Resolves the latest stable headless Factorio version from factorio.com.
 
 const LATEST_RELEASES_URL = "https://factorio.com/api/latest-releases";
+// Overridable so `pnpm dev:fake` can point the panel at the local fake upstreams.
+const latestReleasesUrl = () => process.env.FACTORIO_API_URL ?? LATEST_RELEASES_URL;
 
 // Extracts stable.headless from the latest-releases response, or null if the
 // shape isn't what we expect.
@@ -13,7 +15,7 @@ export function parseLatestStableHeadless(body: unknown): string | null {
 // builder can refuse the new world with a clear message.
 export async function getLatestFactorioVersion(): Promise<string | null> {
   try {
-    const res = await fetch(LATEST_RELEASES_URL, { signal: AbortSignal.timeout(10_000) });
+    const res = await fetch(latestReleasesUrl(), { signal: AbortSignal.timeout(10_000) });
     if (!res.ok) return null;
     return parseLatestStableHeadless(await res.json());
   } catch {

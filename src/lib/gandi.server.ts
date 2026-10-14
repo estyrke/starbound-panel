@@ -1,4 +1,4 @@
-import type { DnsProvider, UpdateDnsBody, UpdateDnsResult } from "./dns.server";
+import type { DnsProvider, UpdateDnsBody, UpdateDnsResult } from "./dns-provider";
 
 const GANDI_API = "https://api.gandi.net/v5/livedns";
 // Overridable so `pnpm dev:local` can point the panel at the local upstreams.

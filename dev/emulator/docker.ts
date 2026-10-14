@@ -27,7 +27,7 @@ export const PLATFORM = "linux/amd64";
 // and sbp.description. A commit copies the container's labels, so it must
 // override every sbp.* label (use `changes: LABEL k=v`).
 export const MANAGED_LABEL = "sbp.emulator";
-export const L = {
+export const LABEL_KEYS = {
   kind: "sbp.kind",
   id: "sbp.id",
   name: "sbp.name",
@@ -45,6 +45,19 @@ export const SNAPSHOT_REPO = "sbp-snapshot";
 export const snapshotRef = (id: number) => `${SNAPSHOT_REPO}:${id}`;
 
 export const DEFAULT_NAMESPACE = "dev";
+
+// The container is named after the Hetzner server so `docker exec` is easy.
+export const containerName = (namespace: string, name: string) =>
+  namespace === DEFAULT_NAMESPACE ? `sbp-${name}` : `sbp-${namespace}-${name}`;
+
+// Docker filters selecting everything one emulator namespace owns.
+export const namespaceFilter = (namespace: string) => ({
+  label: [`${MANAGED_LABEL}=${namespace}`],
+});
+
+// The Hetzner labels stored in the sbp.labels Docker label.
+export const parseHetznerLabels = (dockerLabels: Labels): Labels =>
+  JSON.parse(dockerLabels[LABEL_KEYS.labels] || "{}") as Labels;
 
 // Returns a human-readable problem, or undefined when Docker and the base
 // image are ready.
@@ -97,14 +110,14 @@ export function serverLabels(
 ): Labels {
   return {
     [MANAGED_LABEL]: namespace,
-    [L.kind]: "server",
-    [L.id]: String(s.id),
-    [L.name]: s.name,
-    [L.serverType]: s.serverType,
-    [L.location]: s.location,
-    [L.created]: String(s.created),
-    [L.image]: s.image,
-    [L.labels]: JSON.stringify(s.labels),
+    [LABEL_KEYS.kind]: "server",
+    [LABEL_KEYS.id]: String(s.id),
+    [LABEL_KEYS.name]: s.name,
+    [LABEL_KEYS.serverType]: s.serverType,
+    [LABEL_KEYS.location]: s.location,
+    [LABEL_KEYS.created]: String(s.created),
+    [LABEL_KEYS.image]: s.image,
+    [LABEL_KEYS.labels]: JSON.stringify(s.labels),
   };
 }
 

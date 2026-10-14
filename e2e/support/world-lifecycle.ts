@@ -3,7 +3,8 @@
 // service active, marker still there. Per-game differences live in `WorldGame`.
 
 import { expect, type Page } from "@playwright/test";
-import { containerExists, containerName, exec, sleep, waitForServiceActive } from "./docker.ts";
+import { containerName } from "../../dev/emulator/docker.ts";
+import { containerExists, exec, sleep, waitForServiceActive } from "./docker.ts";
 
 export interface WorldGame {
   // Game label as the panel shows it, e.g. "Factorio" (new-world input aria-label).

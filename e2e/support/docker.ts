@@ -2,14 +2,12 @@
 // everything the emulator created for the e2e namespace.
 
 import Docker from "dockerode";
-import { MANAGED_LABEL } from "../../dev/emulator/docker.ts";
+import { namespaceFilter } from "../../dev/emulator/docker.ts";
 
 const docker = new Docker();
 
 export const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-// Containers are named `sbp-<namespace>-<world name>` for non-default namespaces.
-export const containerName = (namespace: string, world: string) => `sbp-${namespace}-${world}`;
 
 export async function exec(
   container: string,
@@ -53,7 +51,7 @@ export async function waitForServiceActive(container: string, service: string, t
 
 // Remove every container and image the emulator created for `namespace`.
 export async function cleanupNamespace(namespace: string): Promise<void> {
-  const filters = { label: [`${MANAGED_LABEL}=${namespace}`] };
+  const filters = namespaceFilter(namespace);
   for (const c of await docker.listContainers({ all: true, filters })) {
     await docker.getContainer(c.Id).remove({ force: true, v: true });
   }

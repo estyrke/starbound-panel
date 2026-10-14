@@ -1,11 +1,13 @@
 // Drives the panel's real Hetzner client against the Docker-backed emulator,
 // so a green run means the emulator speaks what the panel expects. Skipped
-// when Docker or the base image is unavailable.
+// when Docker or the base image is unavailable, unless REQUIRE_DOCKER=1 (set
+// in the CI e2e job), where that is a failure instead.
 
 import Docker from "dockerode";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   cleanupOldSnapshots,
+  createServer,
   deleteServer,
   getAction,
   getLatestSnapshot,
@@ -16,7 +18,7 @@ import {
   takeSnapshot,
 } from "../../src/lib/hetzner.server";
 import { startFakeUpstreams, type RunningFakeUpstreams } from "../fake-upstreams";
-import { checkDocker, MANAGED_LABEL } from "./docker";
+import { checkDocker, namespaceFilter } from "./docker";
 import { createHetznerEmulator } from "./hetzner-emulator";
 
 const docker = new Docker();
@@ -68,6 +70,12 @@ async function post(path: string, body: unknown): Promise<PostResult> {
   return { status: res.status, body: (await res.json()) as PostResult["body"] };
 }
 
+if (problem && process.env.REQUIRE_DOCKER === "1") {
+  it("has Docker and the base image (REQUIRE_DOCKER=1)", () => {
+    throw new Error(problem);
+  });
+}
+
 describe.skipIf(problem)(`hetzner emulator (${problem ?? "docker ok"})`, () => {
   beforeAll(async () => {
     upstreams = await startFakeUpstreams({
@@ -82,12 +90,12 @@ describe.skipIf(problem)(`hetzner emulator (${problem ?? "docker ok"})`, () => {
     await upstreams?.close();
     const leftovers = await docker.listContainers({
       all: true,
-      filters: { label: [`${MANAGED_LABEL}=${namespace}`] },
+      filters: namespaceFilter(namespace),
     });
     for (const c of leftovers) await docker.getContainer(c.Id).remove({ force: true });
     const images = await docker.listImages({
       all: true,
-      filters: { label: [`${MANAGED_LABEL}=${namespace}`] },
+      filters: namespaceFilter(namespace),
     });
     for (const i of images)
       await docker
@@ -145,7 +153,7 @@ describe.skipIf(problem)(`hetzner emulator (${problem ?? "docker ok"})`, () => {
     // Docker published the firewall's game port (not SSH) on localhost.
     const containers = await docker.listContainers({
       all: true,
-      filters: { label: [`${MANAGED_LABEL}=${namespace}`] },
+      filters: namespaceFilter(namespace),
     });
     const containerId = containers[0].Id;
     expect(containers[0].Ports.map((p) => `${p.IP}:${p.PublicPort}/${p.Type}`)).toEqual([
@@ -192,7 +200,7 @@ describe.skipIf(problem)(`hetzner emulator (${problem ?? "docker ok"})`, () => {
     const containerOf = async (id: number) => {
       const [c] = await docker.listContainers({
         all: true,
-        filters: { label: [`${MANAGED_LABEL}=${namespace}`, `sbp.id=${id}`] },
+        filters: { label: [...namespaceFilter(namespace).label, `sbp.id=${id}`] },
       });
       return c.Id;
     };
@@ -267,4 +275,46 @@ describe.skipIf(problem)(`hetzner emulator (${problem ?? "docker ok"})`, () => {
     expect((await getServer(third.id))?.status).toBe("running");
     await deleteServer(third.id);
   }, 300_000);
+
+  it("restores a snapshot with the game port published after the emulator restarted", async () => {
+    // The panel's own flow (ensureFirewall via createServer) makes the firewall.
+    const first = await createServer({ game: "factorio", name: "restart", gameVersion: "2.0.55" });
+    const firstId = first.server.id;
+    await waitFor(
+      () => getServer(firstId),
+      (s) => s?.status === "running"
+    );
+    await sendAction({ action: "shutdown", id: firstId });
+    const snap = (await takeSnapshot(firstId)).image!;
+    await deleteServer(firstId);
+
+    // dev:local restart: a new emulator instance has no firewalls in memory.
+    const previousUrl = process.env.HETZNER_API_URL;
+    const restarted = await startFakeUpstreams({
+      hetzner: createHetznerEmulator({ docker, namespace, log: () => {} }),
+      log: () => {},
+    });
+    process.env.HETZNER_API_URL = restarted.env.HETZNER_API_URL;
+    try {
+      const restored = await createServer({
+        game: "factorio",
+        name: "restart",
+        gameVersion: "2.0.55",
+        snapshot: { id: snap.id, labels: snap.labels },
+      });
+      const [container] = await docker.listContainers({
+        all: true,
+        filters: {
+          label: [...namespaceFilter(namespace).label, `sbp.id=${restored.server.id}`],
+        },
+      });
+      expect(container.Ports.map((p) => `${p.IP}:${p.PublicPort}/${p.Type}`)).toEqual([
+        "127.0.0.1:34197/udp",
+      ]);
+      await deleteServer(restored.server.id);
+    } finally {
+      process.env.HETZNER_API_URL = previousUrl;
+      await restarted.close();
+    }
+  }, 180_000);
 });

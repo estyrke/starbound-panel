@@ -9,9 +9,9 @@ import Docker from "dockerode";
 import { checkDocker } from "./emulator/docker.ts";
 import { createHetznerEmulator } from "./emulator/hetzner-emulator.ts";
 import { startFakeUpstreams } from "./fake-upstreams.ts";
+import { LOCAL_PANEL_PASSWORD } from "./local-defaults.ts";
 
 const PORT = Number(process.env.LOCAL_UPSTREAMS_PORT ?? 4010);
-const PASSWORD = "local";
 // Overridable so the e2e tests can run beside a developer's own dev:local
 // (own panel port, own container/snapshot namespace).
 const PANEL_PORT = process.env.LOCAL_PANEL_PORT?.trim() || "3000";
@@ -41,7 +41,7 @@ const upstreams = await startFakeUpstreams({
 });
 
 console.log(`[dev:local] Hetzner emulator on ${upstreams.env.HETZNER_API_URL}`);
-console.log(`[dev:local] panel password: ${PASSWORD}`);
+console.log(`[dev:local] panel password: ${LOCAL_PANEL_PASSWORD}`);
 if (!process.env.STEAM_USER) {
   console.log(
     "[dev:local] STEAM_USER / STEAM_PASS not set: new Starbound worlds will refuse to start"
@@ -62,7 +62,7 @@ const vite = spawn("pnpm", ["exec", "vite", "dev", "--port", PANEL_PORT, "--stri
     ...(pinnedFactorio ? { FACTORIO_API_URL } : {}),
     HETZNER_API_TOKEN: "local-hetzner-token",
     DNS_PROVIDER: "none",
-    PANEL_PASSWORD: PASSWORD,
+    PANEL_PASSWORD: LOCAL_PANEL_PASSWORD,
     SESSION_SECRET: "local-session-secret-for-local-dev-only-0123456789",
   },
 });

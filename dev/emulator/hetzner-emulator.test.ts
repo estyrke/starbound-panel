@@ -1,6 +1,7 @@
 // Drives the panel's real Hetzner client against the Docker-backed emulator,
 // so a green run means the emulator speaks what the panel expects. Skipped
-// when Docker or the base image is unavailable.
+// when Docker or the base image is unavailable, unless REQUIRE_DOCKER=1 (set
+// in the CI e2e job), where that is a failure instead.
 
 import Docker from "dockerode";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -66,6 +67,12 @@ async function post(path: string, body: unknown): Promise<PostResult> {
     body: JSON.stringify(body),
   });
   return { status: res.status, body: (await res.json()) as PostResult["body"] };
+}
+
+if (problem && process.env.REQUIRE_DOCKER === "1") {
+  it("has Docker and the base image (REQUIRE_DOCKER=1)", () => {
+    throw new Error(problem);
+  });
 }
 
 describe.skipIf(problem)(`hetzner emulator (${problem ?? "docker ok"})`, () => {

@@ -36,6 +36,9 @@ jobs:
         run: pnpm local:image
       - name: Emulator contract test
         run: pnpm exec vitest run dev/emulator
+        env:
+          # Fail instead of silently skipping when Docker or the image is missing.
+          REQUIRE_DOCKER: "1"
       - run: pnpm exec playwright install --with-deps chromium
       - name: Factorio e2e
         run: pnpm e2e

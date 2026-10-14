@@ -16,8 +16,20 @@
   binaries to a newer version. See `docs/design/factorio-support.md` D8.
 - **Game DNS record**: the per-game Gandi record (`GANDI_RECORD_<GAME>`) that
   points at that game's single live server.
-- **Fake upstreams**: a local stand-in for the external services the panel
-  talks to (Hetzner, Gandi, factorio.com), used to try out the panel without
-  touching production. No real game server ever runs behind them.
+- **Fake upstreams**: local stand-ins for external services, served from one
+  HTTP router (`dev/fake-upstreams.ts`) with a mount per upstream. Today that
+  is the **Hetzner emulator** (mounted at `/hetzner`) and an optional fake
+  factorio.com.
+- **Hetzner emulator / local backend**: a dev-only, Docker-backed stand-in for
+  Hetzner (`dev/emulator/`), started by `pnpm dev:local` and reached through
+  `HETZNER_API_URL`. It speaks the Hetzner JSON shapes the panel reads and runs
+  real game servers locally: a server is a container from the base image, fed
+  the game's unchanged `user_data` through a cloud-init NoCloud seed. Docker is
+  the source of truth (managed `sbp.*` labels), so worlds survive restarts of
+  `pnpm dev:local`. Never deployed.
+- **DNS provider**: the DNS service the start flow uses to update a game DNS
+  record, chosen with `DNS_PROVIDER` (`gandi`, the default, or `none`). The
+  `none` provider makes no network calls and reports `localhost` with the
+  server's IPs.
 
 Design decisions: [`docs/design/`](docs/design/).

@@ -1,5 +1,7 @@
+import type { DnsProvider, UpdateDnsBody, UpdateDnsResult } from "./dns-provider";
+
 const GANDI_API = "https://api.gandi.net/v5/livedns";
-// Overridable so `pnpm dev:fake` can point the panel at the local fake upstreams.
+// Overridable so `pnpm dev:local` can point the panel at the local upstreams.
 const gandiApiUrl = () => process.env.GANDI_API_URL ?? GANDI_API;
 
 async function putRecord(
@@ -20,15 +22,7 @@ async function putRecord(
   }
 }
 
-interface UpdateDnsBody {
-  record: string;
-  ip: string;
-  ipv6: string;
-}
-
-export const updateDns = async (
-  data: UpdateDnsBody
-): Promise<{ success: boolean; ip: string; ipv6: string; record: string }> => {
+export const updateDns = async (data: UpdateDnsBody): Promise<UpdateDnsResult> => {
   const apiKey = process.env.GANDI_API_KEY;
   const domain = process.env.GANDI_DOMAIN;
 
@@ -41,8 +35,10 @@ export const updateDns = async (
     if (ip) updates.push(putRecord(apiKey, domain, record, "A", ip));
     if (ipv6) updates.push(putRecord(apiKey, domain, record, "AAAA", ipv6));
     await Promise.all(updates);
-    return { success: true, ip, ipv6, record: `${record}.${domain}` };
+    return { ip, ipv6, record: `${record}.${domain}` };
   } catch (e) {
     throw new Error((e as Error).message, { cause: e });
   }
 };
+
+export const gandiProvider: DnsProvider = { updateDns };

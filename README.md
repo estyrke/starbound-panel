@@ -54,7 +54,13 @@ Sätt dessa under **Vercel → Project Settings → Environment Variables** (ell
 | `PANEL_PASSWORD` | Lösenordet för att logga in i panelen |
 | `SESSION_SECRET` | Hemlighet som krypterar sessionscookien, minst 32 tecken (t.ex. `openssl rand -hex 32`) |
 
-### Gandi DNS (krävs för automatisk DNS-uppdatering)
+### DNS-leverantör
+
+| Variabel | Beskrivning | Standard |
+|----------|-------------|----------|
+| `DNS_PROVIDER` | Vilken DNS-leverantör som uppdateras när servern startar: `gandi` eller `none`. Okänt värde ger ett tydligt fel. `none` gör inga nätverksanrop och loggar `localhost` med serverns IP-adresser (för lokal körning). | `gandi` |
+
+### Gandi DNS (krävs när `DNS_PROVIDER=gandi`)
 
 | Variabel | Beskrivning | Exempel |
 |----------|-------------|---------|
@@ -103,26 +109,110 @@ Skapa `.env` (gitignorerad) med variablerna ovan, sedan:
 pnpm dev        # dev-server på http://localhost:3000
 pnpm typecheck  # tsc --noEmit
 pnpm lint       # eslint
-pnpm test       # vitest
+pnpm test       # vitest (inte Playwright)
+pnpm e2e        # Playwright, riktiga spel i Docker (se nedan)
 ```
 
-### Lokalt med fejkade API:er
+### Lokal backend med riktiga speldockrar (`pnpm dev:local`)
 
-För att prova GUI och flöden utan att röra Hetzner, Gandi eller factorio.com:
+För att prova panelen, cloud-init-skripten och flödena utan att röra Hetzner eller Gandi:
 
 ```bash
-pnpm dev:fake   # panel på http://localhost:3000, lösenord: fake
+pnpm local:image   # bygg basavbilden (en gång, se nedan)
+pnpm dev:local     # panel på http://localhost:3000, lösenord: local
 ```
 
-Kommandot startar en lokal fejkserver (port 4010) tillsammans med dev-servern och sätter engångsvärden för alla nycklar, så ingen `.env` behövs och riktiga nycklar kan aldrig användas av misstag. Fejkserverna:
+Kommandot kontrollerar att Docker svarar och att basavbilden finns (annars skrivs ett tydligt felmeddelande, t.ex. att du ska köra `pnpm local:image`), startar en **Hetzner-emulator** på port 4010 (`LOCAL_UPSTREAMS_PORT`) och startar dev-servern med engångsvärden för `HETZNER_API_TOKEN`, `PANEL_PASSWORD` och `SESSION_SECRET` samt `DNS_PROVIDER=none`. Riktiga nycklar i `.env` kan därför aldrig användas av misstag. `STEAM_USER` / `STEAM_PASS` tas från din miljö (krävs för en ny Starbound-värld). `FACTORIO_API_URL` lämnas osatt, så panelen frågar riktiga factorio.com (se `LOCAL_FACTORIO_VERSION` nedan).
 
-- **Hetzner**: stateful i minnet. Servrar går `initializing` → `running`, avstängning ger `off`, snapshots blir tillgängliga efter några sekunder. Startar med en levande Starbound-server (`starbound`) och en sovande Factorio-värld (`factory`, äldre version).
-- **Gandi**: lagrar A/AAAA-poster i minnet och loggar varje uppdatering. Aktuella poster: `http://127.0.0.1:4010/gandi/_debug/records`.
-- **factorio.com**: svarar på `latest-releases` med en fast version.
+Emulatorn (`dev/emulator/`) talar den del av Hetzner Cloud API:t som panelen använder och kör varje server som en riktig Docker-container från basavbilden:
 
-Ingen riktig spelserver körs. Tillståndet nollställs vid varje omstart. Justera hastigheten med `FAKE_ACTION_DELAY_MS` (standard 2500) och porten med `FAKE_UPSTREAMS_PORT`.
+- **Docker är sanningen.** Containrar har en `sbp.*`-label med id, namn, servertyp, plats, Hetzner-labels och skapad-tid, så världarna överlever en omstart av `pnpm dev:local`. Inspektera dem med vanliga verktyg, t.ex. `docker exec -it sbp-factory bash`, `docker logs sbp-factory` eller `docker exec sbp-factory cat /var/log/cloud-init-output.log` (containern heter `sbp-<världens namn>`).
+- **Skapa**: spelets oförändrade `user_data` matas till cloud-init via en NoCloud-seed med unikt instance-id.
+- **Status**: körande container är `running`, stoppad är `off`. Publik IP rapporteras som `127.0.0.1` (IPv6 `::/64`).
+- **Portar**: varje TCP/UDP-regel utom SSH i den brandvägg som skickas med skapa-anropet publiceras på samma port på `localhost`. Anslut spelklienten till `localhost` (Factorio: UDP 34197).
+- Servertyp och plats lagras och ekas tillbaka, men ger inga CPU- eller minnesgränser.
+
+- **Serveråtgärder**: `shutdown` skickar systemds stoppsignal (SIGRTMIN+3) med 300 s timeout så att spelet hinner skriva sin sparfil, `poweroff` dödar containern, `poweron` startar den och `reboot` startar om den (`user_data` körs inte om). Docker-anrop körs synkront, så åtgärder returneras redan färdiga.
+- **Snapshots**: "skapa avbild" gör `docker commit` av containern till avbilden `sbp-snapshot:<id>` med snapshot-labels. Listning stöder `type=snapshot`, `label_selector` (även förkodade värden), `sort=created:desc` och `per_page`. Att radera en avbild tar bort taggen, vilket gör att `SNAPSHOT_RETENTION_COUNT` fungerar.
+- **Återställning**: att skapa en server från ett snapshot-id startar en container från den avbilden. Medföljande `user_data` hamnar i en ny NoCloud-seed med nytt instance-id, så den körs igen (Factorio-uppgraderingen beror på det).
+- **Lagerbegränsning**: varje save & stop commitar ovanpå förra avbilden, så lagren staplas. Docker tillåter ungefär 125 lager; om du når gränsen (skapa/commit misslyckas) – starta en ny värld.
+
+`pnpm test` kör också en kontrakttest av emulatorn mot panelens riktiga Hetzner-klient. Den hoppas över när Docker eller basavbilden saknas.
+
+#### End-to-end-tester (Playwright)
+
+```bash
+pnpm local:image                        # basavbilden måste finnas
+pnpm exec playwright install chromium   # en gång
+pnpm e2e
+```
+
+`pnpm e2e` startar `pnpm dev:local` själv (panelen på port 3100, emulatorn på 4011, namnrymden `e2e`, så det går bra att ha din egen `dev:local` igång) och kör Factorio-scenariot i en riktig webbläsare mot riktiga containrar: logga in, ny värld, kortet blir ONLINE, `factorio.service` är aktiv i containern, en markörfil skrivs bredvid sparfilen, SPARA & STÄNG ger ett SOVANDE kort, STARTA ger ONLINE igen med aktiv tjänst och markören kvar. Det tar ungefär en halv minut utöver första nedladdningen av Factorio. Testet raderar de containrar och snapshot-avbilder det skapat (före och efter körningen). Spelporten 34197/udp måste vara ledig, så stoppa en egen Factorio-värld först. Vid fel sparas skärmdump och trace i `test-results/`.
+
+**Starbound lokalt.** `e2e/starbound.spec.ts` kör samma scenario för Starbound (tjänsten `starbound.service`, sparkatalogen `/home/steam/starbound/storage`). Det hoppas över med ett tydligt skäl om inte `STEAM_USER` och `STEAM_PASS` är satta, så CI (som inte har dem) förblir grönt och inget Steam-lösenord lagras i GitHub. Kontot måste äga Starbound och Steam Guard vara av eller förauktoriserat. På Apple Silicon: kör `pnpm local:binfmt` först (32-bitars steamcmd, se ovan). Port 21025/tcp måste vara ledig.
+
+```bash
+pnpm local:image
+pnpm local:binfmt        # bara Apple Silicon
+STEAM_USER=... STEAM_PASS=... pnpm e2e
+```
+
+Den första installationen (apt, steamcmd under emulering, ca 1 GB spelnedladdning) och återställningen (som kör `user_data` igen) tar var sin lång stund; testets tidsgräns är 75 minuter.
+
+Scenariot är en delad hjälpfunktion (`e2e/support/world-lifecycle.ts`) parametriserad per spel (`WorldGame`: tjänst, sparkatalog, installationstid), så ett nytt spel är en ny `*.spec.ts`. I CI körs jobbet `e2e` på varje push/PR: det bygger basavbilden, kör emulatorns kontrakttest och sedan Factorio-testet (inbyggd amd64, inget qemu-i386 behövs).
 
 Panelen läser bas-URL:erna från `HETZNER_API_URL`, `GANDI_API_URL` och `FACTORIO_API_URL`; utan dem används de riktiga tjänsterna.
+
+#### Fäst Factorios "senaste" version (`LOCAL_FACTORIO_VERSION`)
+
+Med `LOCAL_FACTORIO_VERSION=x.y.z` monterar `dev:local` den fejkade factorio.com-servern (`dev/fake-factorio.ts`) och pekar panelen på den via `FACTORIO_API_URL`, så att x.y.z räknas som senaste stabila version. Själva spelet hämtas fortfarande från riktiga factorio.com, så versionen måste finnas som riktig release. Utan variabeln används riktiga factorio.com.
+
+Testa en uppgradering (#11):
+
+```bash
+LOCAL_FACTORIO_VERSION=2.0.55 pnpm dev:local   # skapa en Factorio-värld: etiketten factorio-version blir 2.0.55
+# starta om utan variabeln: den riktiga senaste versionen räknas nu som ny
+pnpm dev:local
+```
+
+### Basavbild för lokala speldockrar (Docker / OrbStack)
+
+Den lokala Hetzner-emulatorn (spec #19) kör spelens oförändrade cloud-init `user_data` i Docker-containrar. Underlaget är en amd64-avbild med Ubuntu 22.04, systemd som PID 1 och cloud-init med datakällan NoCloud. Verifierat på OrbStack 2.2 / Apple Silicon.
+
+**Uppsättning (Mac):**
+
+1. Installera [OrbStack](https://orbstack.dev) (dokumenterad Docker-leverantör; bara Docker Engine API och vanliga Docker-funktioner används, så Colima och Docker på Linux fungerar också).
+2. `pnpm local:image` bygger `starbound-panel-base:latest` (`docker/base/Dockerfile`, alltid `linux/amd64`; på Apple Silicon körs den via Rosetta).
+3. `pnpm local:binfmt` (bara Apple Silicon, krävs för Starbound) registrerar en patchad qemu-i386 i Docker-VM:en. Se nedan. Registreringen försvinner troligen när OrbStack startas om (ej testat), kör då kommandot igen. Det är idempotent.
+4. `docker/base/smoke.sh [antal]` kör rökprovet: första boot, omstart, commit + ny container med ny `instance-id` (upprepas).
+
+**32-bitars steamcmd (Apple Silicon).** Rosetta kör inte 32-bitars x86; OrbStack skickar i386 till sin inbyggda qemu-i386 (skyddad, går inte att avregistrera). Den kör steamcmd bara delvis: självuppdateringen går bra men sedan kraschar den vid "Loading Steam API" med `Fatal error: futex robust_list not initialized by pthreads` (qemu-user svarar ENOSYS på `set/get_robust_list`). Detsamma gäller officiella qemu 10.2.3 (`tonistiigi/binfmt` kan inte heller ersätta posten). Lösningen i repot är `docker/qemu-i386/`: qemu 10.2.3 med en liten patch som minns robust-listan, registrerad som en *ny* binfmt-post (`qemu-i386-robust`, flaggor `OCF`). Kärnan provar den senast registrerade posten först, så den går före OrbStacks. Med den körs `steamcmd +login anonymous +quit` till slut, och Starbounds riktiga `user_data` når Steams inloggning. På en x86-Linux-maskin behövs inget av detta.
+
+**Containerinställningar för systemd** (verifierade; `docker create` + start, ingen `--privileged`):
+
+```
+--platform linux/amd64
+--cgroupns=host -v /sys/fs/cgroup:/sys/fs/cgroup:rw
+--tmpfs /run --tmpfs /run/lock
+--stop-signal SIGRTMIN+3 --stop-timeout 300
+```
+
+- Utan `--cgroupns=host` + skrivbar cgroup-mount, eller utan de två tmpfs-mounten, dör containern direkt och tyst (exit 255, ingen logg).
+- `/tmp` behöver ingen tmpfs. `--privileged` fungerar också men behövs inte.
+- Avbilden har `STOPSIGNAL SIGRTMIN+3` (systemds halt-signal; SIGTERM gör ingenting) och det följer med `docker commit`. Men host-inställningarna ovan (cgroup, tmpfs, portar, stop-timeout) följer **inte** med en commit och måste anges vid varje `docker create`.
+- Stopp tar under en sekund; Factorio skriver sin sparfil vid stoppet (kontrollerat: `world.zip` ändras, markörfil överlever commit + restore).
+- Portar publiceras med `-p 34197:34197/udp`, `-p 21025:21025/tcp -p 21025:21025/udp` med mera.
+
+**NoCloud-seed.** Avbildens `/etc/cloud/cloud.cfg.d/99-nocloud.cfg` pekar på seed-katalogen `/var/lib/cloud/seed/nocloud/` med filerna `meta-data` (`instance-id: <unikt>`) och `user-data` (skriptet, `#!/bin/bash`). Lägg in dem med `docker create` följt av `docker cp <katalog>/. <container>:/var/lib/cloud/seed/nocloud/` (dockerode: `putArchive`) *innan* start; ingen bind mount behövs, och en ny seed skriver över gamla filer i en commitad avbild. Vänta på färdig cloud-init med `docker exec <c> cloud-init status --wait` (exit 1 och `status: error` om `user_data` misslyckades; logg i `/var/log/cloud-init-output.log`).
+
+- Ny `instance-id` i en container skapad från en commitad avbild kör `user_data` igen (testat 5 cykler i rad). Samma `instance-id` kör det inte igen, och inte heller `docker restart`.
+- Avbilden stänger av cloud-inits nätverkskonfiguration, `preserve_hostname` och omskrivning av apt-källor (`98-container.cfg`). Utan det kraschar cloud-init-local (`udevadm` saknas) och apt-källorna blir `UNAVAILABLE` (utan `lsb-release`).
+- `user_data` använder `sudo`, `curl` och `ca-certificates`, som finns i avbilden. Allt annat installeras av skriptet själv (`apt-get update` första gången).
+
+**Spelen i containern** (`user_data` ur spelregistret, oförändrad):
+
+- Factorio (version `stable`, port 34197/udp): klart på ~15 s, `factorio.service` aktiv, kartan skapas, sparas vid `docker stop`, och återställs ur en commit med ny seed.
+- Starbound: `apt`, `dpkg --add-architecture i386`, `steamcmd` och inloggningen mot Steam fungerar (kördes med falska uppgifter: `ERROR (Invalid Password)`). **Själva Starbound-installationen (app 211820) och att `starbound.service` startar är inte provad** (inga `STEAM_USER`/`STEAM_PASS` i miljön).
 
 ## Felsökning
 

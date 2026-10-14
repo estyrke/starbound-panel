@@ -2,9 +2,10 @@
 
 import type { FakeRouter } from "./types.ts";
 
-export const FAKE_FACTORIO_VERSION = "2.0.55";
+export const DEFAULT_FAKE_FACTORIO_VERSION = "2.0.55";
 
-export function createFakeFactorio(): FakeRouter {
+export function createFakeFactorio(version = DEFAULT_FAKE_FACTORIO_VERSION): FakeRouter {
+  const FAKE_FACTORIO_VERSION = version;
   return (req) => {
     if (req.method === "GET" && req.path === "/api/latest-releases") {
       return {

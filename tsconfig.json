@@ -16,5 +16,5 @@
     "skipLibCheck": true,
     "strictNullChecks": true
   },
-  "include": ["src", "dev", "api", "vite.config.ts", "vitest.config.ts", "eslint.config.ts"]
+  "include": ["src", "dev", "e2e", "api", "playwright.config.ts", "vite.config.ts", "vitest.config.ts", "eslint.config.ts"]
 }

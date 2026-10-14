@@ -18,3 +18,35 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm lint
       - run: pnpm test
+
+  # Real games in Docker containers on native amd64 (no qemu-i386 binfmt step
+  # needed): the emulator contract test, then the Factorio browser e2e.
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Build the base image
+        run: pnpm local:image
+      - name: Emulator contract test
+        run: pnpm exec vitest run dev/emulator
+        env:
+          # Fail instead of silently skipping when Docker or the image is missing.
+          REQUIRE_DOCKER: "1"
+      - run: pnpm exec playwright install --with-deps chromium
+      - name: Factorio e2e
+        run: pnpm e2e
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 7

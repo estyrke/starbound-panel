@@ -22,6 +22,10 @@ export const PLATFORM = "linux/amd64";
 //   sbp.created     creation time, epoch milliseconds
 //   sbp.image       the image the server was created from (stock name or snapshot id)
 //   sbp.labels      the Hetzner labels, as JSON
+//   sbp.description snapshot description (snapshot images only)
+// A snapshot image carries sbp.kind=snapshot, sbp.id, sbp.created, sbp.labels
+// and sbp.description. A commit copies the container's labels, so it must
+// override every sbp.* label (use `changes: LABEL k=v`).
 export const MANAGED_LABEL = "sbp.emulator";
 export const L = {
   kind: "sbp.kind",
@@ -32,6 +36,7 @@ export const L = {
   created: "sbp.created",
   image: "sbp.image",
   labels: "sbp.labels",
+  description: "sbp.description", // snapshots only
 } as const;
 
 export const DEFAULT_NAMESPACE = "dev";

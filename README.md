@@ -112,23 +112,30 @@ pnpm lint       # eslint
 pnpm test       # vitest
 ```
 
-### Lokalt med fejkade API:er
+### Lokal backend med riktiga speldockrar (`pnpm dev:local`)
 
-För att prova GUI och flöden utan att röra Hetzner, Gandi eller factorio.com:
+För att prova panelen, cloud-init-skripten och flödena utan att röra Hetzner eller Gandi:
 
 ```bash
-pnpm dev:fake   # panel på http://localhost:3000, lösenord: fake
+pnpm local:image   # bygg basavbilden (en gång, se nedan)
+pnpm dev:local     # panel på http://localhost:3000, lösenord: local
 ```
 
-Kommandot startar en lokal fejkserver (port 4010) tillsammans med dev-servern och sätter engångsvärden för alla nycklar, så ingen `.env` behövs och riktiga nycklar kan aldrig användas av misstag. Fejkserverna:
+Kommandot kontrollerar att Docker svarar och att basavbilden finns (annars skrivs ett tydligt felmeddelande, t.ex. att du ska köra `pnpm local:image`), startar en **Hetzner-emulator** på port 4010 (`LOCAL_UPSTREAMS_PORT`) och startar dev-servern med engångsvärden för `HETZNER_API_TOKEN`, `PANEL_PASSWORD` och `SESSION_SECRET` samt `DNS_PROVIDER=none`. Riktiga nycklar i `.env` kan därför aldrig användas av misstag. `STEAM_USER` / `STEAM_PASS` tas från din miljö (krävs för en ny Starbound-värld). `FACTORIO_API_URL` lämnas osatt, så panelen frågar riktiga factorio.com.
 
-- **Hetzner**: stateful i minnet. Servrar går `initializing` → `running`, avstängning ger `off`, snapshots blir tillgängliga efter några sekunder. Startar med en levande Starbound-server (`starbound`) och en sovande Factorio-värld (`factory`, äldre version).
-- **Gandi**: lagrar A/AAAA-poster i minnet och loggar varje uppdatering. Aktuella poster: `http://127.0.0.1:4010/gandi/_debug/records`.
-- **factorio.com**: svarar på `latest-releases` med en fast version.
+Emulatorn (`dev/emulator/`) talar den del av Hetzner Cloud API:t som panelen använder och kör varje server som en riktig Docker-container från basavbilden:
 
-Ingen riktig spelserver körs. Tillståndet nollställs vid varje omstart. Justera hastigheten med `FAKE_ACTION_DELAY_MS` (standard 2500) och porten med `FAKE_UPSTREAMS_PORT`.
+- **Docker är sanningen.** Containrar har en `sbp.*`-label med id, namn, servertyp, plats, Hetzner-labels och skapad-tid, så världarna överlever en omstart av `pnpm dev:local`. Inspektera dem med vanliga verktyg, t.ex. `docker exec -it sbp-factory bash`, `docker logs sbp-factory` eller `docker exec sbp-factory cat /var/log/cloud-init-output.log` (containern heter `sbp-<världens namn>`).
+- **Skapa**: spelets oförändrade `user_data` matas till cloud-init via en NoCloud-seed med unikt instance-id.
+- **Status**: körande container är `running`, stoppad är `off`. Publik IP rapporteras som `127.0.0.1` (IPv6 `::/64`).
+- **Portar**: varje TCP/UDP-regel utom SSH i den brandvägg som skickas med skapa-anropet publiceras på samma port på `localhost`. Anslut spelklienten till `localhost` (Factorio: UDP 34197).
+- Servertyp och plats lagras och ekas tillbaka, men ger inga CPU- eller minnesgränser.
 
-Panelen läser bas-URL:erna från `HETZNER_API_URL`, `GANDI_API_URL` och `FACTORIO_API_URL`; utan dem används de riktiga tjänsterna.
+Ännu inte med (kommer i nästa steg av spec #19): serveråtgärder (avstängning, omstart), snapshots och återställning.
+
+`pnpm test` kör också en kontrakttest av emulatorn mot panelens riktiga Hetzner-klient. Den hoppas över när Docker eller basavbilden saknas.
+
+Panelen läser bas-URL:erna från `HETZNER_API_URL`, `GANDI_API_URL` och `FACTORIO_API_URL`; utan dem används de riktiga tjänsterna. Den fejkade factorio.com-servern (`dev/fake-factorio.ts`) används ännu inte av `dev:local`.
 
 ### Basavbild för lokala speldockrar (Docker / OrbStack)
 

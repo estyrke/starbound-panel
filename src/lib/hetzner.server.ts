@@ -10,7 +10,7 @@ function versionLabelOf(labels: Record<string, string> | undefined): Record<stri
 }
 
 const HETZNER_API = "https://api.hetzner.cloud/v1/";
-// Overridable so `pnpm dev:fake` can point the panel at the local fake upstreams.
+// Overridable so `pnpm dev:local` can point the panel at the local upstreams.
 const hetznerApiUrl = () => process.env.HETZNER_API_URL ?? HETZNER_API;
 
 let apiPromise: ReturnType<typeof configureClient> | null = null;

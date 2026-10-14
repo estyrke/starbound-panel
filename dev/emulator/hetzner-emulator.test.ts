@@ -4,7 +4,7 @@
 
 import Docker from "dockerode";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { deleteServer, getServer, listServers } from "../../src/lib/hetzner.server";
+import { deleteServer, getServer, listServers, listSnapshots } from "../../src/lib/hetzner.server";
 import { startFakeUpstreams, type RunningFakeUpstreams } from "../fake-upstreams";
 import { checkDocker, MANAGED_LABEL } from "./docker";
 import { createHetznerEmulator } from "./hetzner-emulator";
@@ -79,6 +79,7 @@ describe.skipIf(problem)(`hetzner emulator (${problem ?? "docker ok"})`, () => {
 
   it("starts empty", async () => {
     expect(await listServers()).toEqual([]);
+    expect(await listSnapshots()).toEqual([]);
   });
 
   it("creates a server that runs user_data, reports status and ports, and deletes it", async () => {

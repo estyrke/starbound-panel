@@ -25,7 +25,15 @@ import {
   serverLabels,
   systemdHostConfig,
 } from "./docker.ts";
-import { err, finishedAction, pagination, serverJson, type ServerView } from "./hetzner-json.ts";
+import {
+  err,
+  finishedAction,
+  pagination,
+  serverJson,
+  snapshotJson,
+  type ServerView,
+  type SnapshotView,
+} from "./hetzner-json.ts";
 import { matchesLabelSelector, type Labels } from "./label-selector.ts";
 import { publishedPorts, type FirewallRule } from "./ports.ts";
 
@@ -93,6 +101,16 @@ export function createHetznerEmulator({
       .sort((a, b) => a.id - b.id);
   }
 
+  async function listSnapshots(): Promise<SnapshotView[]> {
+    const images = await docker.listImages({ filters: { label: ownFilter("snapshot") } });
+    return images.map((i) => ({
+      id: Number(i.Labels[L.id]),
+      description: i.Labels[L.description] ?? "",
+      created: Number(i.Labels[L.created]),
+      labels: JSON.parse(i.Labels[L.labels] || "{}") as Labels,
+    }));
+  }
+
   const findServer = async (id: number) => (await listServers()).find((s) => s.id === id);
 
   const containerOf = async (id: number) => {
@@ -113,6 +131,21 @@ export function createHetznerEmulator({
         matchesLabelSelector(s.labels, req.query.get("label_selector"))
     );
     return { status: 200, body: { servers: list.map(serverJson), meta: pagination(list.length) } };
+  }
+
+  async function handleListImages(req: FakeRequest): Promise<FakeResponse> {
+    let list = (await listSnapshots()).filter((i) =>
+      matchesLabelSelector(i.labels, req.query.get("label_selector"))
+    );
+    if (req.query.get("sort")?.startsWith("created:desc"))
+      list.sort((a, b) => b.created - a.created);
+    const total = list.length;
+    const perPage = Number(req.query.get("per_page")) || 25;
+    list = list.slice(0, perPage);
+    return {
+      status: 200,
+      body: { images: list.map(snapshotJson), meta: pagination(total, perPage) },
+    };
   }
 
   async function resolveImage(image: string): Promise<{ ref: string } | undefined> {
@@ -212,6 +245,8 @@ export function createHetznerEmulator({
         }
         if (m === "DELETE") return await handleDeleteServer(id);
       }
+
+      if (m === "GET" && path === "/images") return await handleListImages(req);
 
       const am = /^\/actions\/(\d+)$/.exec(path);
       if (am && m === "GET") {

@@ -85,3 +85,26 @@ export function finishedAction(
     error: null,
   };
 }
+
+export interface SnapshotView {
+  id: number;
+  description: string;
+  created: number;
+  labels: Labels;
+}
+
+export const snapshotJson = (i: SnapshotView) => ({
+  id: i.id,
+  type: "snapshot",
+  status: "available",
+  name: null,
+  description: i.description,
+  created: iso(i.created),
+  image_size: 1.5,
+  disk_size: 40,
+  os_flavor: "ubuntu",
+  os_version: "22.04",
+  labels: i.labels,
+  protection: { delete: false },
+  deprecated: null,
+});

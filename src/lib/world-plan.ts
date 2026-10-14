@@ -3,6 +3,7 @@
 
 import {
   FACTORIO_PRESETS,
+  MAX_SEED,
   GAMES,
   gameIdOf,
   type Env,
@@ -24,6 +25,7 @@ export interface WorldPlanInput {
   // Live servers; labels decide which game each one occupies.
   // Map-gen choices for a fresh Factorio world.
   options?: FactorioMapOptions;
+  // Live servers; labels decide which game each one occupies.
   servers: { name: string; labels?: Record<string, string> }[];
   env: Env;
 }
@@ -47,7 +49,9 @@ export type WorldPlanResult = { ok: true; plan: WorldPlan } | { ok: false; error
 // Seed and preset end up on a shell command line, so only known shapes pass;
 // raw JSON must parse before anything is created.
 function validateOptions(o: FactorioMapOptions): string | null {
-  if (o.seed && !/^\d{1,10}$/.test(o.seed)) return "Seed must be a whole number";
+  if (o.seed && !(/^\d{1,10}$/.test(o.seed) && Number(o.seed) <= MAX_SEED)) {
+    return `Seed must be a whole number up to ${MAX_SEED}`;
+  }
   if (o.preset && !(FACTORIO_PRESETS as readonly string[]).includes(o.preset)) {
     return `Unknown map preset "${o.preset}"`;
   }

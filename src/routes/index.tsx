@@ -14,6 +14,7 @@ import type {
 } from "../lib/types.js";
 import {
   FACTORIO_PRESETS,
+  MAX_SEED,
   GAMES,
   gameIdOf,
   type FactorioMapOptions,
@@ -699,7 +700,10 @@ const EMPTY_MAP_FORM: MapFormState = {
 };
 
 function validateMapForm(m: MapFormState): string | null {
-  if (m.seed.trim() && !/^\d{1,10}$/.test(m.seed.trim())) return "Seed måste vara ett heltal";
+  const seed = m.seed.trim();
+  if (seed && !(/^\d{1,10}$/.test(seed) && Number(seed) <= MAX_SEED)) {
+    return `Seed måste vara ett heltal upp till ${MAX_SEED}`;
+  }
   for (const raw of [m.mapGenSettingsJson, m.mapSettingsJson]) {
     if (!raw.trim()) continue;
     try {

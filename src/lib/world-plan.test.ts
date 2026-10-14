@@ -174,6 +174,8 @@ describe("buildWorldPlan for Factorio", () => {
     it("refuses a seed that isn't a number or a preset that doesn't exist", () => {
       expect(plan({ seed: "1; rm -rf /" }).ok).toBe(false);
       expect(plan({ preset: "nope" }).ok).toBe(false);
+      expect(plan({ seed: "4294967296" }).ok).toBe(false);
+      expect(plan({ seed: "4294967295" }).ok).toBe(true);
     });
 
     // The JSON a heredoc named `name` writes, parsed.

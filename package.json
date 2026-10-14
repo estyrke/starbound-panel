@@ -12,7 +12,8 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "format": "prettier --write .",
-    "test": "vitest run"
+    "test": "vitest run",
+    "local:image": "docker build --platform linux/amd64 -t starbound-panel-base:latest docker/base"
   },
   "dependencies": {
     "@small-tech/hetzner-cloud-openapi-client": "^1.0.0",

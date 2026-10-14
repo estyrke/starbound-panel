@@ -54,7 +54,13 @@ Sätt dessa under **Vercel → Project Settings → Environment Variables** (ell
 | `PANEL_PASSWORD` | Lösenordet för att logga in i panelen |
 | `SESSION_SECRET` | Hemlighet som krypterar sessionscookien, minst 32 tecken (t.ex. `openssl rand -hex 32`) |
 
-### Gandi DNS (krävs för automatisk DNS-uppdatering)
+### DNS-leverantör
+
+| Variabel | Beskrivning | Standard |
+|----------|-------------|----------|
+| `DNS_PROVIDER` | Vilken DNS-leverantör som uppdateras när servern startar: `gandi` eller `none`. Okänt värde ger ett tydligt fel. `none` gör inga nätverksanrop och loggar `localhost` med serverns IP-adresser (för lokal körning). | `gandi` |
+
+### Gandi DNS (krävs när `DNS_PROVIDER=gandi`)
 
 | Variabel | Beskrivning | Exempel |
 |----------|-------------|---------|

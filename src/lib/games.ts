@@ -10,6 +10,9 @@ export interface FirewallPort {
   port: string;
 }
 
+// Factorio seeds are unsigned 32-bit integers.
+export const MAX_SEED = 4_294_967_295;
+
 export const FACTORIO_PRESETS = [
   "default",
   "rich-resources",
@@ -135,7 +138,7 @@ function factorioCloudInit(env: Env, version: string, options: FactorioMapOption
       : null;
   const mapSettings: object | null = rawMapSettings
     ? JSON.parse(rawMapSettings)
-    : options.noEnemies
+    : options.noEnemies && !rawMapGen
       ? { enemy_expansion: { enabled: false } }
       : null;
   const createFlags = [

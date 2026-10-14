@@ -20,9 +20,20 @@ if (problem) {
   process.exit(1);
 }
 
+// LOCAL_FACTORIO_VERSION pins what counts as the latest Factorio release, so a
+// world can be created on an older version and then upgraded to the real latest.
+const pinnedFactorio = process.env.LOCAL_FACTORIO_VERSION?.trim() || undefined;
+if (pinnedFactorio && !/^\d+\.\d+\.\d+$/.test(pinnedFactorio)) {
+  console.error(
+    `[dev:local] LOCAL_FACTORIO_VERSION must look like 2.0.55, got "${pinnedFactorio}"`
+  );
+  process.exit(1);
+}
+
 const upstreams = await startFakeUpstreams({
   port: PORT,
   hetzner: createHetznerEmulator({ docker }),
+  factorioVersion: pinnedFactorio,
 });
 
 console.log(`[dev:local] Hetzner emulator on ${upstreams.env.HETZNER_API_URL}`);
@@ -33,13 +44,18 @@ if (!process.env.STEAM_USER) {
   );
 }
 
-// FACTORIO_API_URL stays unset: the panel asks the real factorio.com.
-const { HETZNER_API_URL } = upstreams.env;
+// FACTORIO_API_URL stays unset (the panel asks the real factorio.com) unless
+// the latest version is pinned.
+const { HETZNER_API_URL, FACTORIO_API_URL } = upstreams.env;
+if (pinnedFactorio) {
+  console.log(`[dev:local] Factorio "latest" pinned to ${pinnedFactorio}`);
+}
 const vite = spawn("pnpm", ["exec", "vite", "dev"], {
   stdio: "inherit",
   env: {
     ...process.env,
     HETZNER_API_URL,
+    ...(pinnedFactorio ? { FACTORIO_API_URL } : {}),
     HETZNER_API_TOKEN: "local-hetzner-token",
     DNS_PROVIDER: "none",
     PANEL_PASSWORD: PASSWORD,

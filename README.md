@@ -109,7 +109,8 @@ Skapa `.env` (gitignorerad) med variablerna ovan, sedan:
 pnpm dev        # dev-server på http://localhost:3000
 pnpm typecheck  # tsc --noEmit
 pnpm lint       # eslint
-pnpm test       # vitest
+pnpm test       # vitest (inte Playwright)
+pnpm e2e        # Playwright, riktiga spel i Docker (se nedan)
 ```
 
 ### Lokal backend med riktiga speldockrar (`pnpm dev:local`)
@@ -137,6 +138,18 @@ Emulatorn (`dev/emulator/`) talar den del av Hetzner Cloud API:t som panelen anv
 - **Lagerbegränsning**: varje save & stop commitar ovanpå förra avbilden, så lagren staplas. Docker tillåter ungefär 125 lager; om du når gränsen (skapa/commit misslyckas) – starta en ny värld.
 
 `pnpm test` kör också en kontrakttest av emulatorn mot panelens riktiga Hetzner-klient. Den hoppas över när Docker eller basavbilden saknas.
+
+#### End-to-end-tester (Playwright)
+
+```bash
+pnpm local:image                        # basavbilden måste finnas
+pnpm exec playwright install chromium   # en gång
+pnpm e2e
+```
+
+`pnpm e2e` startar `pnpm dev:local` själv (panelen på port 3100, emulatorn på 4011, namnrymden `e2e`, så det går bra att ha din egen `dev:local` igång) och kör Factorio-scenariot i en riktig webbläsare mot riktiga containrar: logga in, ny värld, kortet blir ONLINE, `factorio.service` är aktiv i containern, en markörfil skrivs bredvid sparfilen, SPARA & STÄNG ger ett SOVANDE kort, STARTA ger ONLINE igen med aktiv tjänst och markören kvar. Det tar ungefär en halv minut utöver första nedladdningen av Factorio. Testet raderar de containrar och snapshot-avbilder det skapat (före och efter körningen). Spelporten 34197/udp måste vara ledig, så stoppa en egen Factorio-värld först. Vid fel sparas skärmdump och trace i `test-results/`.
+
+Scenariot är en delad hjälpfunktion (`e2e/support/world-lifecycle.ts`) parametriserad per spel (`WorldGame`: tjänst, sparkatalog, installationstid), så ett nytt spel är en ny `*.spec.ts`. I CI körs jobbet `e2e` på varje push/PR: det bygger basavbilden, kör emulatorns kontrakttest och sedan Factorio-testet (inbyggd amd64, inget qemu-i386 behövs).
 
 Panelen läser bas-URL:erna från `HETZNER_API_URL`, `GANDI_API_URL` och `FACTORIO_API_URL`; utan dem används de riktiga tjänsterna.
 

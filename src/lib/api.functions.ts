@@ -3,7 +3,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { authMiddleware } from "./auth.middleware";
 import { GAMES, gameIdOf } from "./games";
 import { getLatestFactorioVersion } from "./factorio.server";
-import { updateDns } from "./gandi.server";
+import { getDnsProvider } from "./dns.server";
 import { buildDormantList, deriveIpv6Host } from "./helpers";
 import {
   createServer,
@@ -116,7 +116,7 @@ export const updateDnsForServer = createServerFn({ method: "POST" })
     const ipv6 = deriveIpv6Host(server?.public_net.ipv6?.ip);
     if (!ip || !ipv6) return null;
     const record = GAMES[gameIdOf(server?.labels)].dnsRecord(process.env);
-    const res = await updateDns({ record, ip, ipv6 });
+    const res = await getDnsProvider(process.env).updateDns({ record, ip, ipv6 });
     return { record: res.record, ip: res.ip, ipv6: res.ipv6 };
   });
 

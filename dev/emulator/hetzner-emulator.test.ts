@@ -4,7 +4,17 @@
 
 import Docker from "dockerode";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { deleteServer, getServer, listServers, listSnapshots } from "../../src/lib/hetzner.server";
+import {
+  cleanupOldSnapshots,
+  deleteServer,
+  getAction,
+  getLatestSnapshot,
+  getServer,
+  listServers,
+  listSnapshots,
+  sendAction,
+  takeSnapshot,
+} from "../../src/lib/hetzner.server";
 import { startFakeUpstreams, type RunningFakeUpstreams } from "../fake-upstreams";
 import { checkDocker, MANAGED_LABEL } from "./docker";
 import { createHetznerEmulator } from "./hetzner-emulator";
@@ -75,6 +85,15 @@ describe.skipIf(problem)(`hetzner emulator (${problem ?? "docker ok"})`, () => {
       filters: { label: [`${MANAGED_LABEL}=${namespace}`] },
     });
     for (const c of leftovers) await docker.getContainer(c.Id).remove({ force: true });
+    const images = await docker.listImages({
+      all: true,
+      filters: { label: [`${MANAGED_LABEL}=${namespace}`] },
+    });
+    for (const i of images)
+      await docker
+        .getImage(i.Id)
+        .remove({ force: true })
+        .catch(() => {});
   });
 
   it("starts empty", async () => {
@@ -165,4 +184,85 @@ describe.skipIf(problem)(`hetzner emulator (${problem ?? "docker ok"})`, () => {
     await expect(getServer(id)).rejects.toThrow(/404|not found/i);
     expect(await listServers()).toEqual([]);
   }, 180_000);
+
+  it("shuts down, snapshots, restores with progress and re-runs user_data, and applies retention", async () => {
+    Object.assign(process.env, { SNAPSHOT_RETENTION_COUNT: "1" });
+    const fw = await post("/firewalls", { name: "life-fw", rules: [] });
+    const labels = { managed: "starbound-panel", game: "factorio", "server-name": "life" };
+    const containerOf = async (id: number) => {
+      const [c] = await docker.listContainers({
+        all: true,
+        filters: { label: [`${MANAGED_LABEL}=${namespace}`, `sbp.id=${id}`] },
+      });
+      return c.Id;
+    };
+    const create = async (image: string, userData: string) => {
+      const r = await post("/servers", {
+        name: "life",
+        server_type: "cx23",
+        location: "hel1",
+        image,
+        labels,
+        firewalls: [{ firewall: fw.body.firewall.id }],
+        user_data: userData,
+      });
+      expect(r.status).toBe(201);
+      const id = r.body.server.id;
+      const cid = await containerOf(id);
+      await exec(cid, ["cloud-init", "status", "--wait"]);
+      return { id, cid };
+    };
+    const saveAndStop = async (id: number) => {
+      const shutdown = await sendAction({ action: "shutdown", id });
+      expect(shutdown.body.action.status).toBe("success");
+      expect((await getAction(shutdown.body.action.id)).status).toBe("success");
+      expect((await getServer(id))?.status).toBe("off");
+      const snap = await takeSnapshot(id);
+      expect(snap.image.type).toBe("snapshot");
+      expect((await deleteServer(id)).success).toBe(true);
+      return snap.image.id;
+    };
+
+    // 1. fresh world with some progress
+    const first = await create("ubuntu-22.04", "#!/bin/bash\necho first >> /var/tmp/runs\n");
+    await exec(first.cid, ["bash", "-c", "echo progress > /var/tmp/progress"]);
+    const snap1 = await saveAndStop(first.id);
+    expect((await getLatestSnapshot("life"))?.id).toBe(snap1);
+    expect((await getLatestSnapshot("life%20x")) ?? null).toBeNull();
+    const withLabels = (await listSnapshots()).find((i) => i.id === snap1);
+    expect(withLabels?.labels).toMatchObject(labels);
+
+    // 2. restore from the snapshot: progress intact, new user_data runs again
+    const second = await create(String(snap1), "#!/bin/bash\necho second >> /var/tmp/runs\n");
+    const progress = await exec(second.cid, ["cat", "/var/tmp/progress"]);
+    expect(progress.out.trim()).toBe("progress");
+    const runs = await exec(second.cid, ["cat", "/var/tmp/runs"]);
+    expect(runs.out.trim().split(/\s+/)).toEqual(["first", "second"]);
+
+    // 3. second snapshot; retention keeps only the newest
+    const snap2 = await saveAndStop(second.id);
+    expect(snap2).toBeGreaterThan(snap1);
+    expect((await getLatestSnapshot("life"))?.id).toBe(snap2);
+    expect((await cleanupOldSnapshots("life")).remaining).toBe(1);
+    expect((await listSnapshots()).map((i) => i.id)).toEqual([snap2]);
+
+    // 4. restore again from the stacked image still works
+    const third = await create(String(snap2), "#!/bin/bash\necho third >> /var/tmp/runs\n");
+    const runs3 = await exec(third.cid, ["cat", "/var/tmp/runs"]);
+    expect(runs3.out.trim().split(/\s+/)).toEqual(["first", "second", "third"]);
+
+    // 5. reboot keeps the container and does not re-run user_data; poweroff/poweron work
+    await sendAction({ action: "reboot", id: third.id });
+    await waitFor(
+      () => exec(third.cid, ["systemctl", "is-system-running", "--wait"]),
+      (r) => r.code === 0 || r.out.includes("running")
+    );
+    const runsAfterReboot = await exec(third.cid, ["cat", "/var/tmp/runs"]);
+    expect(runsAfterReboot.out.trim().split(/\s+/)).toEqual(["first", "second", "third"]);
+    await sendAction({ action: "poweroff", id: third.id });
+    expect((await getServer(third.id))?.status).toBe("off");
+    await sendAction({ action: "poweron", id: third.id });
+    expect((await getServer(third.id))?.status).toBe("running");
+    await deleteServer(third.id);
+  }, 300_000);
 });

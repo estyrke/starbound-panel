@@ -22,6 +22,8 @@ import {
   nocloudSeedTar,
   PLATFORM,
   SEED_DIR,
+  SNAPSHOT_REPO,
+  snapshotRef,
   serverLabels,
   systemdHostConfig,
 } from "./docker.ts";
@@ -103,12 +105,16 @@ export function createHetznerEmulator({
 
   async function listSnapshots(): Promise<SnapshotView[]> {
     const images = await docker.listImages({ filters: { label: ownFilter("snapshot") } });
-    return images.map((i) => ({
-      id: Number(i.Labels[L.id]),
-      description: i.Labels[L.description] ?? "",
-      created: Number(i.Labels[L.created]),
-      labels: JSON.parse(i.Labels[L.labels] || "{}") as Labels,
-    }));
+    // A deleted snapshot that other snapshots are built on loses its tag but
+    // stays around as a parent layer; only tagged images are live snapshots.
+    return images
+      .filter((i) => i.RepoTags?.some((t) => t.startsWith(`${SNAPSHOT_REPO}:`)))
+      .map((i) => ({
+        id: Number(i.Labels[L.id]),
+        description: i.Labels[L.description] ?? "",
+        created: Number(i.Labels[L.created]),
+        labels: JSON.parse(i.Labels[L.labels] || "{}") as Labels,
+      }));
   }
 
   const findServer = async (id: number) => (await listServers()).find((s) => s.id === id);
@@ -150,7 +156,8 @@ export function createHetznerEmulator({
 
   async function resolveImage(image: string): Promise<{ ref: string } | undefined> {
     if (!/^\d+$/.test(image)) return { ref: BASE_IMAGE };
-    return undefined; // snapshot images arrive with the snapshot ticket
+    const snapshot = (await listSnapshots()).find((i) => i.id === Number(image));
+    return snapshot ? { ref: snapshotRef(snapshot.id) } : undefined;
   }
 
   async function handleCreateServer(body: Record<string, unknown>): Promise<FakeResponse> {
@@ -215,6 +222,72 @@ export function createHetznerEmulator({
     return { status: 200, body: { action: finish("delete_server", [{ id, type: "server" }]) } };
   }
 
+  type ServerAction = "shutdown" | "poweroff" | "poweron" | "reboot";
+
+  async function handleServerAction(id: number, command: ServerAction): Promise<FakeResponse> {
+    const container = await containerOf(id);
+    if (!container) return err(404, "not_found", "server not found");
+    // Shutdown relies on the image's SIGRTMIN+3 stop signal (systemd halt) and
+    // the container's long stop timeout so games can write their save.
+    if (command === "shutdown") await container.stop().catch(ignoreNotRunning);
+    else if (command === "poweroff") {
+      await container.kill().catch(ignoreNotRunning);
+      await container.wait({ condition: "not-running" });
+    } else if (command === "poweron") await container.start().catch(ignoreRunning);
+    else await container.restart();
+    log(`[hetzner-emulator] ${command} server #${id}`);
+    return { status: 201, body: { action: finish(command, [{ id, type: "server" }]) } };
+  }
+
+  async function handleCreateImage(
+    id: number,
+    body: Record<string, unknown>
+  ): Promise<FakeResponse> {
+    const container = await containerOf(id);
+    if (!container) return err(404, "not_found", "server not found");
+    const imageId = newId();
+    const created = Date.now();
+    const labels = (body.labels as Labels | undefined) ?? {};
+    const description = typeof body.description === "string" ? body.description : "";
+    // A commit copies the container's labels, so override every sbp.* one.
+    const overrides = {
+      [L.kind]: "snapshot",
+      [L.id]: String(imageId),
+      [L.created]: String(created),
+      [L.labels]: JSON.stringify(labels),
+      [L.description]: description,
+    };
+    await container.commit({
+      repo: SNAPSHOT_REPO,
+      tag: String(imageId),
+      comment: description,
+      changes: Object.entries(overrides)
+        .map(([k, v]) => `LABEL ${JSON.stringify(k)}=${JSON.stringify(v)}`)
+        .join("\n"),
+    });
+    log(`[hetzner-emulator] snapshot server #${id} -> image #${imageId}`);
+    return {
+      status: 201,
+      body: {
+        image: snapshotJson({ id: imageId, description, created, labels }),
+        action: finish("create_image", [
+          { id, type: "server" },
+          { id: imageId, type: "image" },
+        ]),
+      },
+    };
+  }
+
+  async function handleDeleteImage(id: number): Promise<FakeResponse> {
+    if (!(await listSnapshots()).some((i) => i.id === id)) {
+      return err(404, "not_found", "image not found");
+    }
+    // Removing the tag drops the snapshot; layers other snapshots are built on stay.
+    await docker.getImage(snapshotRef(id)).remove({ force: true });
+    log(`[hetzner-emulator] delete image #${id}`);
+    return { status: 204 };
+  }
+
   function handleCreateFirewall(body: { name?: string; rules?: FirewallRule[] }): FakeResponse {
     if (!body.name) return err(422, "invalid_input", "name is required");
     const fw = { id: newId(), name: body.name, rules: body.rules ?? [] };
@@ -246,6 +319,15 @@ export function createHetznerEmulator({
         if (m === "DELETE") return await handleDeleteServer(id);
       }
 
+      const sa = /^\/servers\/(\d+)\/actions\/(shutdown|poweroff|poweron|reboot)$/.exec(path);
+      if (sa && m === "POST") return await handleServerAction(Number(sa[1]), sa[2] as ServerAction);
+
+      const ci = /^\/servers\/(\d+)\/actions\/create_image$/.exec(path);
+      if (ci && m === "POST") return await handleCreateImage(Number(ci[1]), body);
+
+      const im = /^\/images\/(\d+)$/.exec(path);
+      if (im && m === "DELETE") return await handleDeleteImage(Number(im[1]));
+
       if (m === "GET" && path === "/images") return await handleListImages(req);
 
       const am = /^\/actions\/(\d+)$/.exec(path);
@@ -271,6 +353,16 @@ export function createHetznerEmulator({
       return err(500, "server_error", (e as Error).message);
     }
     return undefined;
+  };
+}
+
+// Stopping an already stopped container (or starting a running one) is not an
+// error on Hetzner either.
+const ignoreNotRunning = ignoreStatus(304, 409);
+const ignoreRunning = ignoreStatus(304);
+function ignoreStatus(...codes: number[]) {
+  return (e: unknown) => {
+    if (!codes.includes((e as { statusCode?: number }).statusCode ?? 0)) throw e;
   };
 }
 

@@ -39,6 +39,11 @@ export const L = {
   description: "sbp.description", // snapshots only
 } as const;
 
+// Snapshot images are tagged so deleting one only removes its tag: layers that
+// newer snapshots are stacked on stay.
+export const SNAPSHOT_REPO = "sbp-snapshot";
+export const snapshotRef = (id: number) => `${SNAPSHOT_REPO}:${id}`;
+
 export const DEFAULT_NAMESPACE = "dev";
 
 // Returns a human-readable problem, or undefined when Docker and the base

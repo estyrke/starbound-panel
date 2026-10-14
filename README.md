@@ -149,6 +149,16 @@ pnpm e2e
 
 `pnpm e2e` startar `pnpm dev:local` själv (panelen på port 3100, emulatorn på 4011, namnrymden `e2e`, så det går bra att ha din egen `dev:local` igång) och kör Factorio-scenariot i en riktig webbläsare mot riktiga containrar: logga in, ny värld, kortet blir ONLINE, `factorio.service` är aktiv i containern, en markörfil skrivs bredvid sparfilen, SPARA & STÄNG ger ett SOVANDE kort, STARTA ger ONLINE igen med aktiv tjänst och markören kvar. Det tar ungefär en halv minut utöver första nedladdningen av Factorio. Testet raderar de containrar och snapshot-avbilder det skapat (före och efter körningen). Spelporten 34197/udp måste vara ledig, så stoppa en egen Factorio-värld först. Vid fel sparas skärmdump och trace i `test-results/`.
 
+**Starbound lokalt.** `e2e/starbound.spec.ts` kör samma scenario för Starbound (tjänsten `starbound.service`, sparkatalogen `/home/steam/starbound/storage`). Det hoppas över med ett tydligt skäl om inte `STEAM_USER` och `STEAM_PASS` är satta, så CI (som inte har dem) förblir grönt och inget Steam-lösenord lagras i GitHub. Kontot måste äga Starbound och Steam Guard vara av eller förauktoriserat. På Apple Silicon: kör `pnpm local:binfmt` först (32-bitars steamcmd, se ovan). Port 21025/tcp måste vara ledig.
+
+```bash
+pnpm local:image
+pnpm local:binfmt        # bara Apple Silicon
+STEAM_USER=... STEAM_PASS=... pnpm e2e
+```
+
+Den första installationen (apt, steamcmd under emulering, ca 1 GB spelnedladdning) och återställningen (som kör `user_data` igen) tar var sin lång stund; testets tidsgräns är 75 minuter.
+
 Scenariot är en delad hjälpfunktion (`e2e/support/world-lifecycle.ts`) parametriserad per spel (`WorldGame`: tjänst, sparkatalog, installationstid), så ett nytt spel är en ny `*.spec.ts`. I CI körs jobbet `e2e` på varje push/PR: det bygger basavbilden, kör emulatorns kontrakttest och sedan Factorio-testet (inbyggd amd64, inget qemu-i386 behövs).
 
 Panelen läser bas-URL:erna från `HETZNER_API_URL`, `GANDI_API_URL` och `FACTORIO_API_URL`; utan dem används de riktiga tjänsterna.

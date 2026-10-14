@@ -1,3 +1,4 @@
+# check=skip=FromPlatformFlagConstDisallowed
 # Base image for the local Hetzner emulator: Ubuntu 22.04 (amd64) with systemd
 # as PID 1 and cloud-init using only the NoCloud datasource. See README.
 FROM --platform=linux/amd64 ubuntu:22.04
@@ -14,6 +15,8 @@ RUN apt-get update \
 RUN rm -f /etc/cloud/cloud.cfg.d/90_dpkg.cfg \
  && printf 'datasource_list: [ NoCloud, None ]\ndatasource:\n  NoCloud:\n    seedfrom: /var/lib/cloud/seed/nocloud/\n' \
       > /etc/cloud/cloud.cfg.d/99-nocloud.cfg \
+ && printf 'network:\n  config: disabled\npreserve_hostname: true\nmanage_etc_hosts: false\n' \
+      > /etc/cloud/cloud.cfg.d/98-container.cfg \
  && mkdir -p /var/lib/cloud/seed/nocloud
 
 # Units that make no sense (or fail) inside a container.

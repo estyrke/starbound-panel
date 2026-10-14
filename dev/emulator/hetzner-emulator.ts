@@ -3,21 +3,18 @@
 // truth (see the label scheme in docker.ts); the only in-memory state is
 // short-lived action records and the firewalls the panel creates, which exist
 // just to answer list/create calls and to say which ports to publish.
-//
-// Layout for extending it (server actions, snapshots, images, restore):
-//   - add routes to the `route` function at the bottom, one handler each
-//   - `listServers` / `findServer` rebuild the Hetzner view from containers;
-//     snapshots will be the same over images with L.kind = "snapshot"
-//   - `createServerFrom` takes the image to run, so restore from a snapshot
-//     is the same call with the snapshot image
+// Servers are containers, snapshots are committed images; both carry sbp.*
+// labels from which the Hetzner view is rebuilt.
 
 import Docker from "dockerode";
 import type { FakeRequest, FakeResponse, FakeRouter } from "../types.ts";
 import {
   BASE_IMAGE,
+  containerName,
   DEFAULT_NAMESPACE,
+  parseHetznerLabels,
   exposedPorts,
-  L,
+  LABEL_KEYS,
   MANAGED_LABEL,
   nocloudSeedTar,
   PLATFORM,
@@ -73,13 +70,9 @@ export function createHetznerEmulator({
     return action;
   };
 
-  // The container is named after the Hetzner server so `docker exec` is easy.
-  const containerName = (name: string) =>
-    namespace === DEFAULT_NAMESPACE ? `sbp-${name}` : `sbp-${namespace}-${name}`;
-
   // ---- Docker -> Hetzner view -------------------------------------------
 
-  const ownFilter = (kind: string) => [`${MANAGED_LABEL}=${namespace}`, `${L.kind}=${kind}`];
+  const ownFilter = (kind: string) => [`${MANAGED_LABEL}=${namespace}`, `${LABEL_KEYS.kind}=${kind}`];
 
   async function listServers(): Promise<ServerView[]> {
     const containers = await docker.listContainers({
@@ -88,16 +81,16 @@ export function createHetznerEmulator({
     });
     return containers
       .map((c) => {
-        const l = c.Labels;
+        const dockerLabels = c.Labels;
         return {
-          id: Number(l[L.id]),
-          name: l[L.name],
+          id: Number(dockerLabels[LABEL_KEYS.id]),
+          name: dockerLabels[LABEL_KEYS.name],
           status: statusOf(c.State),
-          created: Number(l[L.created]),
-          labels: JSON.parse(l[L.labels] || "{}") as Labels,
-          serverType: l[L.serverType],
-          location: l[L.location],
-          image: l[L.image],
+          created: Number(dockerLabels[LABEL_KEYS.created]),
+          labels: parseHetznerLabels(dockerLabels),
+          serverType: dockerLabels[LABEL_KEYS.serverType],
+          location: dockerLabels[LABEL_KEYS.location],
+          image: dockerLabels[LABEL_KEYS.image],
         };
       })
       .sort((a, b) => a.id - b.id);
@@ -110,10 +103,10 @@ export function createHetznerEmulator({
     return images
       .filter((i) => i.RepoTags?.some((t) => t.startsWith(`${SNAPSHOT_REPO}:`)))
       .map((i) => ({
-        id: Number(i.Labels[L.id]),
-        description: i.Labels[L.description] ?? "",
-        created: Number(i.Labels[L.created]),
-        labels: JSON.parse(i.Labels[L.labels] || "{}") as Labels,
+        id: Number(i.Labels[LABEL_KEYS.id]),
+        description: i.Labels[LABEL_KEYS.description] ?? "",
+        created: Number(i.Labels[LABEL_KEYS.created]),
+        labels: parseHetznerLabels(i.Labels),
       }));
   }
 
@@ -122,7 +115,7 @@ export function createHetznerEmulator({
   const containerOf = async (id: number) => {
     const [c] = await docker.listContainers({
       all: true,
-      filters: { label: [...ownFilter("server"), `${L.id}=${id}`] },
+      filters: { label: [...ownFilter("server"), `${LABEL_KEYS.id}=${id}`] },
     });
     return c ? docker.getContainer(c.Id) : undefined;
   };
@@ -181,7 +174,7 @@ export function createHetznerEmulator({
     const labels = (body.labels as Labels | undefined) ?? {};
 
     const container = await docker.createContainer({
-      name: containerName(name),
+      name: containerName(namespace, name),
       Hostname: name,
       Image: source.ref,
       platform: PLATFORM,
@@ -251,11 +244,11 @@ export function createHetznerEmulator({
     const description = typeof body.description === "string" ? body.description : "";
     // A commit copies the container's labels, so override every sbp.* one.
     const overrides = {
-      [L.kind]: "snapshot",
-      [L.id]: String(imageId),
-      [L.created]: String(created),
-      [L.labels]: JSON.stringify(labels),
-      [L.description]: description,
+      [LABEL_KEYS.kind]: "snapshot",
+      [LABEL_KEYS.id]: String(imageId),
+      [LABEL_KEYS.created]: String(created),
+      [LABEL_KEYS.labels]: JSON.stringify(labels),
+      [LABEL_KEYS.description]: description,
     };
     await container.commit({
       repo: SNAPSHOT_REPO,

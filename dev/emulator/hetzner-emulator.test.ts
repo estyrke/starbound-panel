@@ -16,7 +16,7 @@ import {
   takeSnapshot,
 } from "../../src/lib/hetzner.server";
 import { startFakeUpstreams, type RunningFakeUpstreams } from "../fake-upstreams";
-import { checkDocker, MANAGED_LABEL } from "./docker";
+import { checkDocker, namespaceFilter } from "./docker";
 import { createHetznerEmulator } from "./hetzner-emulator";
 
 const docker = new Docker();
@@ -82,12 +82,12 @@ describe.skipIf(problem)(`hetzner emulator (${problem ?? "docker ok"})`, () => {
     await upstreams?.close();
     const leftovers = await docker.listContainers({
       all: true,
-      filters: { label: [`${MANAGED_LABEL}=${namespace}`] },
+      filters: namespaceFilter(namespace),
     });
     for (const c of leftovers) await docker.getContainer(c.Id).remove({ force: true });
     const images = await docker.listImages({
       all: true,
-      filters: { label: [`${MANAGED_LABEL}=${namespace}`] },
+      filters: namespaceFilter(namespace),
     });
     for (const i of images)
       await docker
@@ -145,7 +145,7 @@ describe.skipIf(problem)(`hetzner emulator (${problem ?? "docker ok"})`, () => {
     // Docker published the firewall's game port (not SSH) on localhost.
     const containers = await docker.listContainers({
       all: true,
-      filters: { label: [`${MANAGED_LABEL}=${namespace}`] },
+      filters: namespaceFilter(namespace),
     });
     const containerId = containers[0].Id;
     expect(containers[0].Ports.map((p) => `${p.IP}:${p.PublicPort}/${p.Type}`)).toEqual([
@@ -192,7 +192,7 @@ describe.skipIf(problem)(`hetzner emulator (${problem ?? "docker ok"})`, () => {
     const containerOf = async (id: number) => {
       const [c] = await docker.listContainers({
         all: true,
-        filters: { label: [`${MANAGED_LABEL}=${namespace}`, `sbp.id=${id}`] },
+        filters: { label: [...namespaceFilter(namespace).label, `sbp.id=${id}`] },
       });
       return c.Id;
     };

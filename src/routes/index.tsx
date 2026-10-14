@@ -471,7 +471,11 @@ function LiveCard({ server, game, op, isBusy, onStop, onReboot, onPowerOn }: Liv
     : (STATUS_LABEL[server.status] ?? server.status.toUpperCase());
 
   return (
-    <div className={`${styles.card} ${isOn && !op ? styles.cardOn : ""}`}>
+    <div
+      className={`${styles.card} ${isOn && !op ? styles.cardOn : ""}`}
+      data-testid="world-card"
+      data-world={server.name}
+    >
       <div className={styles.cardTop}>
         <div>
           <div className={styles.serverName}>
@@ -543,7 +547,11 @@ interface DormantCardProps {
 
 function DormantCard({ name, game, serverType, location, snapshot, onStart }: DormantCardProps) {
   return (
-    <div className={`${styles.card} ${styles.cardDormant}`}>
+    <div
+      className={`${styles.card} ${styles.cardDormant}`}
+      data-testid="world-card"
+      data-world={name}
+    >
       <div className={styles.cardTop}>
         <div>
           <div className={styles.serverName}>
@@ -585,7 +593,7 @@ interface PendingCardProps {
 
 function PendingCard({ name, game, op }: PendingCardProps) {
   return (
-    <div className={styles.card}>
+    <div className={styles.card} data-testid="world-card" data-world={name}>
       <div className={styles.cardTop}>
         <div>
           <div className={styles.serverName}>

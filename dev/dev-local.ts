@@ -12,6 +12,10 @@ import { startFakeUpstreams } from "./fake-upstreams.ts";
 
 const PORT = Number(process.env.LOCAL_UPSTREAMS_PORT ?? 4010);
 const PASSWORD = "local";
+// Overridable so the e2e tests can run beside a developer's own dev:local
+// (own panel port, own container/snapshot namespace).
+const PANEL_PORT = process.env.LOCAL_PANEL_PORT?.trim() || "3000";
+const NAMESPACE = process.env.LOCAL_NAMESPACE?.trim() || undefined;
 
 const docker = new Docker();
 const problem = await checkDocker(docker);
@@ -32,7 +36,7 @@ if (pinnedFactorio && !/^\d+\.\d+\.\d+$/.test(pinnedFactorio)) {
 
 const upstreams = await startFakeUpstreams({
   port: PORT,
-  hetzner: createHetznerEmulator({ docker }),
+  hetzner: createHetznerEmulator({ docker, namespace: NAMESPACE }),
   factorioVersion: pinnedFactorio,
 });
 
@@ -50,7 +54,7 @@ const { HETZNER_API_URL, FACTORIO_API_URL } = upstreams.env;
 if (pinnedFactorio) {
   console.log(`[dev:local] Factorio "latest" pinned to ${pinnedFactorio}`);
 }
-const vite = spawn("pnpm", ["exec", "vite", "dev"], {
+const vite = spawn("pnpm", ["exec", "vite", "dev", "--port", PANEL_PORT, "--strictPort"], {
   stdio: "inherit",
   env: {
     ...process.env,

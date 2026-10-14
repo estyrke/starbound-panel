@@ -124,6 +124,45 @@ Ingen riktig spelserver körs. Tillståndet nollställs vid varje omstart. Juste
 
 Panelen läser bas-URL:erna från `HETZNER_API_URL`, `GANDI_API_URL` och `FACTORIO_API_URL`; utan dem används de riktiga tjänsterna.
 
+### Basavbild för lokala speldockrar (Docker / OrbStack)
+
+Den lokala Hetzner-emulatorn (spec #19) kör spelens oförändrade cloud-init `user_data` i Docker-containrar. Underlaget är en amd64-avbild med Ubuntu 22.04, systemd som PID 1 och cloud-init med datakällan NoCloud. Verifierat på OrbStack 2.2 / Apple Silicon.
+
+**Uppsättning (Mac):**
+
+1. Installera [OrbStack](https://orbstack.dev) (dokumenterad Docker-leverantör; bara Docker Engine API och vanliga Docker-funktioner används, så Colima och Docker på Linux fungerar också).
+2. `pnpm local:image` bygger `starbound-panel-base:latest` (`docker/base/Dockerfile`, alltid `linux/amd64`; på Apple Silicon körs den via Rosetta).
+3. `pnpm local:binfmt` (bara Apple Silicon, krävs för Starbound) registrerar en patchad qemu-i386 i Docker-VM:en. Se nedan. Registreringen försvinner troligen när OrbStack startas om (ej testat), kör då kommandot igen. Det är idempotent.
+4. `docker/base/smoke.sh [antal]` kör rökprovet: första boot, omstart, commit + ny container med ny `instance-id` (upprepas).
+
+**32-bitars steamcmd (Apple Silicon).** Rosetta kör inte 32-bitars x86; OrbStack skickar i386 till sin inbyggda qemu-i386 (skyddad, går inte att avregistrera). Den kör steamcmd bara delvis: självuppdateringen går bra men sedan kraschar den vid "Loading Steam API" med `Fatal error: futex robust_list not initialized by pthreads` (qemu-user svarar ENOSYS på `set/get_robust_list`). Detsamma gäller officiella qemu 10.2.3 (`tonistiigi/binfmt` kan inte heller ersätta posten). Lösningen i repot är `docker/qemu-i386/`: qemu 10.2.3 med en liten patch som minns robust-listan, registrerad som en *ny* binfmt-post (`qemu-i386-robust`, flaggor `OCF`). Kärnan provar den senast registrerade posten först, så den går före OrbStacks. Med den körs `steamcmd +login anonymous +quit` till slut, och Starbounds riktiga `user_data` når Steams inloggning. På en x86-Linux-maskin behövs inget av detta.
+
+**Containerinställningar för systemd** (verifierade; `docker create` + start, ingen `--privileged`):
+
+```
+--platform linux/amd64
+--cgroupns=host -v /sys/fs/cgroup:/sys/fs/cgroup:rw
+--tmpfs /run --tmpfs /run/lock
+--stop-signal SIGRTMIN+3 --stop-timeout 300
+```
+
+- Utan `--cgroupns=host` + skrivbar cgroup-mount, eller utan de två tmpfs-mounten, dör containern direkt och tyst (exit 255, ingen logg).
+- `/tmp` behöver ingen tmpfs. `--privileged` fungerar också men behövs inte.
+- Avbilden har `STOPSIGNAL SIGRTMIN+3` (systemds halt-signal; SIGTERM gör ingenting) och det följer med `docker commit`. Men host-inställningarna ovan (cgroup, tmpfs, portar, stop-timeout) följer **inte** med en commit och måste anges vid varje `docker create`.
+- Stopp tar under en sekund; Factorio skriver sin sparfil vid stoppet (kontrollerat: `world.zip` ändras, markörfil överlever commit + restore).
+- Portar publiceras med `-p 34197:34197/udp`, `-p 21025:21025/tcp -p 21025:21025/udp` med mera.
+
+**NoCloud-seed.** Avbildens `/etc/cloud/cloud.cfg.d/99-nocloud.cfg` pekar på seed-katalogen `/var/lib/cloud/seed/nocloud/` med filerna `meta-data` (`instance-id: <unikt>`) och `user-data` (skriptet, `#!/bin/bash`). Lägg in dem med `docker create` följt av `docker cp <katalog>/. <container>:/var/lib/cloud/seed/nocloud/` (dockerode: `putArchive`) *innan* start; ingen bind mount behövs, och en ny seed skriver över gamla filer i en commitad avbild. Vänta på färdig cloud-init med `docker exec <c> cloud-init status --wait` (exit 1 och `status: error` om `user_data` misslyckades; logg i `/var/log/cloud-init-output.log`).
+
+- Ny `instance-id` i en container skapad från en commitad avbild kör `user_data` igen (testat 5 cykler i rad). Samma `instance-id` kör det inte igen, och inte heller `docker restart`.
+- Avbilden stänger av cloud-inits nätverkskonfiguration, `preserve_hostname` och omskrivning av apt-källor (`98-container.cfg`). Utan det kraschar cloud-init-local (`udevadm` saknas) och apt-källorna blir `UNAVAILABLE` (utan `lsb-release`).
+- `user_data` använder `sudo`, `curl` och `ca-certificates`, som finns i avbilden. Allt annat installeras av skriptet själv (`apt-get update` första gången).
+
+**Spelen i containern** (`user_data` ur spelregistret, oförändrad):
+
+- Factorio (version `stable`, port 34197/udp): klart på ~15 s, `factorio.service` aktiv, kartan skapas, sparas vid `docker stop`, och återställs ur en commit med ny seed.
+- Starbound: `apt`, `dpkg --add-architecture i386`, `steamcmd` och inloggningen mot Steam fungerar (kördes med falska uppgifter: `ERROR (Invalid Password)`). **Själva Starbound-installationen (app 211820) och att `starbound.service` startar är inte provad** (inga `STEAM_USER`/`STEAM_PASS` i miljön).
+
 ## Felsökning
 
 ### Cloud-init / första installation

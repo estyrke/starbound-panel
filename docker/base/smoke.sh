@@ -20,7 +20,7 @@ boot() { # image instance-id marker
   printf '#!/bin/bash\necho %s >> /var/log/smoke.log\n' "$marker" > "$WORK/user-data"
   docker create --name $NAME --platform linux/amd64 \
     --cgroupns=host -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
-    --tmpfs /run --tmpfs /run/lock --tmpfs /tmp \
+    --tmpfs /run --tmpfs /run/lock \
     --stop-signal SIGRTMIN+3 --stop-timeout 300 \
     "$image" >/dev/null
   docker cp "$WORK/." $NAME:/var/lib/cloud/seed/nocloud/
@@ -43,7 +43,20 @@ boot "$IMAGE" iid-0 run-0
 check run-0
 docker exec $NAME systemctl is-system-running --wait || true
 
-image=$IMAGE
+# A plain restart (Hetzner reboot) keeps the instance-id: user_data must not re-run.
+docker restart $NAME >/dev/null
+docker exec $NAME cloud-init status --wait >/dev/null || true
+check run-0
+
+# The stop signal baked into the image must survive docker commit.
+docker stop $NAME >/dev/null
+docker commit $NAME sbp-smoke:committed >/dev/null
+sig=$(docker inspect -f '{{.Config.StopSignal}}' sbp-smoke:committed)
+[ "$sig" = "SIGRTMIN+3" ] || { echo "FAIL: stop signal '$sig' lost on commit" >&2; exit 1; }
+# Same instance-id on a committed image: no re-run.
+boot sbp-smoke:committed iid-0 run-should-not-run
+check run-0
+
 expected=run-0
 for i in $(seq 1 "$CYCLES"); do
   docker stop $NAME >/dev/null

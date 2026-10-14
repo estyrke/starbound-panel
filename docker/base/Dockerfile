@@ -8,14 +8,14 @@ ENV container=docker DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       systemd systemd-sysv dbus cloud-init sudo ca-certificates curl iproute2 \
-      iputils-ping gnupg locales tzdata \
+      iputils-ping gnupg locales tzdata lsb-release \
  && rm -rf /var/lib/apt/lists/*
 
 # Only NoCloud, reading the seed from this directory (user-data + meta-data).
 RUN rm -f /etc/cloud/cloud.cfg.d/90_dpkg.cfg \
  && printf 'datasource_list: [ NoCloud, None ]\ndatasource:\n  NoCloud:\n    seedfrom: /var/lib/cloud/seed/nocloud/\n' \
       > /etc/cloud/cloud.cfg.d/99-nocloud.cfg \
- && printf 'network:\n  config: disabled\npreserve_hostname: true\nmanage_etc_hosts: false\n' \
+ && printf 'network:\n  config: disabled\npreserve_hostname: true\nmanage_etc_hosts: false\napt:\n  preserve_sources_list: true\n' \
       > /etc/cloud/cloud.cfg.d/98-container.cfg \
  && mkdir -p /var/lib/cloud/seed/nocloud
 

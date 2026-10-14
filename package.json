@@ -13,6 +13,7 @@
     "lint": "eslint .",
     "format": "prettier --write .",
     "test": "vitest run",
+    "local:binfmt": "docker build -t starbound-panel-qemu-i386 docker/qemu-i386 && docker run --rm --privileged starbound-panel-qemu-i386",
     "local:image": "docker build --platform linux/amd64 -t starbound-panel-base:latest docker/base"
   },
   "dependencies": {

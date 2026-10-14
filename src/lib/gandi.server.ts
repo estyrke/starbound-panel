@@ -22,7 +22,7 @@ async function putRecord(
   }
 }
 
-const updateDns = async (data: UpdateDnsBody): Promise<UpdateDnsResult> => {
+export const updateDns = async (data: UpdateDnsBody): Promise<UpdateDnsResult> => {
   const apiKey = process.env.GANDI_API_KEY;
   const domain = process.env.GANDI_DOMAIN;
 

@@ -7,6 +7,7 @@ import Docker from "dockerode";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   cleanupOldSnapshots,
+  createServer,
   deleteServer,
   getAction,
   getLatestSnapshot,
@@ -274,4 +275,46 @@ describe.skipIf(problem)(`hetzner emulator (${problem ?? "docker ok"})`, () => {
     expect((await getServer(third.id))?.status).toBe("running");
     await deleteServer(third.id);
   }, 300_000);
+
+  it("restores a snapshot with the game port published after the emulator restarted", async () => {
+    // The panel's own flow (ensureFirewall via createServer) makes the firewall.
+    const first = await createServer({ game: "factorio", name: "restart", gameVersion: "2.0.55" });
+    const firstId = first.server.id;
+    await waitFor(
+      () => getServer(firstId),
+      (s) => s?.status === "running"
+    );
+    await sendAction({ action: "shutdown", id: firstId });
+    const snap = (await takeSnapshot(firstId)).image!;
+    await deleteServer(firstId);
+
+    // dev:local restart: a new emulator instance has no firewalls in memory.
+    const previousUrl = process.env.HETZNER_API_URL;
+    const restarted = await startFakeUpstreams({
+      hetzner: createHetznerEmulator({ docker, namespace, log: () => {} }),
+      log: () => {},
+    });
+    process.env.HETZNER_API_URL = restarted.env.HETZNER_API_URL;
+    try {
+      const restored = await createServer({
+        game: "factorio",
+        name: "restart",
+        gameVersion: "2.0.55",
+        snapshot: { id: snap.id, labels: snap.labels },
+      });
+      const [container] = await docker.listContainers({
+        all: true,
+        filters: {
+          label: [...namespaceFilter(namespace).label, `sbp.id=${restored.server.id}`],
+        },
+      });
+      expect(container.Ports.map((p) => `${p.IP}:${p.PublicPort}/${p.Type}`)).toEqual([
+        "127.0.0.1:34197/udp",
+      ]);
+      await deleteServer(restored.server.id);
+    } finally {
+      process.env.HETZNER_API_URL = previousUrl;
+      await restarted.close();
+    }
+  }, 180_000);
 });

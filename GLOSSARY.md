@@ -19,5 +19,9 @@
 - **Fake upstreams**: a local stand-in for the external services the panel
   talks to (Hetzner, Gandi, factorio.com), used to try out the panel without
   touching production. No real game server ever runs behind them.
+- **DNS provider**: the DNS service the start flow uses to update a game DNS
+  record, chosen with `DNS_PROVIDER` (`gandi`, the default, or `none`). The
+  `none` provider makes no network calls and reports `localhost` with the
+  server's IPs.
 
 Design decisions: [`docs/design/`](docs/design/).

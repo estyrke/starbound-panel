@@ -10,6 +10,28 @@ export interface FirewallPort {
   port: string;
 }
 
+export const FACTORIO_PRESETS = [
+  "default",
+  "rich-resources",
+  "marathon",
+  "death-world",
+  "death-world-marathon",
+  "rail-world",
+  "ribbon-world",
+  "island",
+] as const;
+
+// Map-gen choices for a new Factorio world. Raw JSON wins over the form fields.
+export interface FactorioMapOptions {
+  seed?: string;
+  preset?: string;
+  peaceful?: boolean;
+  noEnemies?: boolean;
+  mapGenSettingsJson?: string;
+  mapSettingsJson?: string;
+  spaceAge?: boolean;
+}
+
 export interface Game {
   id: GameId;
   label: string;
@@ -24,7 +46,8 @@ export interface Game {
   // `version` is the resolved game version for games with a versionLabel.
   userData: (
     env: Env,
-    version?: string
+    version?: string,
+    options?: FactorioMapOptions
   ) => { ok: true; userData: string } | { ok: false; error: string };
 }
 
@@ -95,8 +118,42 @@ const starbound: Game = {
 
 // Cloud-init for a fresh Factorio install: headless build of `version`, a
 // default-map save, and a systemd unit whose SIGTERM stop writes the save.
-// Space Age and its dependent DLC mods are switched off.
-function factorioCloudInit(env: Env, version: string): string {
+// Space Age and its dependent DLC mods are off unless chosen.
+function factorioCloudInit(env: Env, version: string, options: FactorioMapOptions): string {
+  // Raw JSON wins over the form fields (preset, peaceful, no enemies).
+  const rawMapGen = options.mapGenSettingsJson?.trim();
+  const rawMapSettings = options.mapSettingsJson?.trim();
+  const mapGen: object | null = rawMapGen
+    ? JSON.parse(rawMapGen)
+    : options.peaceful || options.noEnemies
+      ? {
+          ...(options.peaceful && { peaceful_mode: true }),
+          ...(options.noEnemies && {
+            autoplace_controls: { "enemy-base": { frequency: 1, size: 0, richness: 1 } },
+          }),
+        }
+      : null;
+  const mapSettings: object | null = rawMapSettings
+    ? JSON.parse(rawMapSettings)
+    : options.noEnemies
+      ? { enemy_expansion: { enabled: false } }
+      : null;
+  const createFlags = [
+    options.seed ? ` --map-gen-seed ${options.seed}` : "",
+    options.preset && !rawMapGen ? ` --preset ${options.preset}` : "",
+    mapGen ? " --map-gen-settings /opt/factorio/map-gen-settings.json" : "",
+    mapSettings ? " --map-settings /opt/factorio/map-settings.json" : "",
+  ].join("");
+  // Re-serialised so the heredoc can't be ended early by raw input.
+  const settingsFiles = (
+    [
+      ["map-gen-settings.json", mapGen],
+      ["map-settings.json", mapSettings],
+    ] as const
+  )
+    .filter(([, v]) => v)
+    .map(([f, v]) => `cat > /opt/factorio/${f} << 'JSON'\n${JSON.stringify(v)}\nJSON\n`)
+    .join("");
   const password = JSON.stringify(env.FACTORIO_GAME_PASSWORD ?? "");
   const admins = JSON.stringify(
     (env.FACTORIO_ADMINS ?? "")
@@ -114,7 +171,7 @@ function factorioCloudInit(env: Env, version: string): string {
   "autosave_only_on_server": true
 }`;
   const mods = ["base", "space-age", "quality", "elevated-rails"]
-    .map((n) => `{ "name": "${n}", "enabled": ${n === "base"} }`)
+    .map((n) => `{ "name": "${n}", "enabled": ${n === "base" || !!options.spaceAge} }`)
     .join(",\n    ");
   const modList = `{
   "mods": [
@@ -138,8 +195,8 @@ JSON
 cat > /opt/factorio/mods/mod-list.json << 'JSON'
 ${modList}
 JSON
-chown -R factorio:factorio /opt/factorio
-su factorio -c '/opt/factorio/bin/x64/factorio --create /opt/factorio/saves/world.zip'
+${settingsFiles}chown -R factorio:factorio /opt/factorio
+su factorio -c '/opt/factorio/bin/x64/factorio --create /opt/factorio/saves/world.zip${createFlags}'
 cat > /etc/systemd/system/factorio.service << 'SERVICE'
 [Unit]
 Description=Factorio Headless Server
@@ -170,9 +227,9 @@ const factorio: Game = {
   defaultServerType: (env) => env.HETZNER_SERVER_TYPE_FACTORIO ?? "cx33",
   versionLabel: "factorio-version",
   dnsRecord: (env) => env.GANDI_RECORD_FACTORIO ?? "@",
-  userData: (env, version) => {
+  userData: (env, version, options = {}) => {
     if (!version) return { ok: false, error: "Factorio version is required for a fresh install" };
-    return { ok: true, userData: factorioCloudInit(env, version) };
+    return { ok: true, userData: factorioCloudInit(env, version, options) };
   },
 };
 

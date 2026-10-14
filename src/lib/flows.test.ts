@@ -53,6 +53,17 @@ describe("runStartFlow", () => {
     });
   });
 
+  it("passes the game and map-gen options to the start call", async () => {
+    const deps = startDeps();
+    const options = { seed: "42", preset: "island", peaceful: true, spaceAge: false };
+
+    await runStartFlow(deps, { name: "f1", game: "factorio", options }, () => {}, fast);
+
+    expect(deps.startServerInit).toHaveBeenCalledWith({
+      data: { name: "f1", game: "factorio", options },
+    });
+  });
+
   it("treats DNS failure as non-fatal", async () => {
     const deps = startDeps({
       updateDnsForServer: vi.fn(async () => {

@@ -1,5 +1,5 @@
 import configureClient, { CreateServerRequest } from "@small-tech/hetzner-cloud-openapi-client";
-import { GAMES, gameIdOf, type Game, type GameId } from "./games";
+import { GAMES, gameIdOf, type FactorioMapOptions, type Game, type GameId } from "./games";
 import { selectSnapshotsToDelete } from "./helpers";
 import { buildWorldPlan } from "./world-plan";
 
@@ -137,6 +137,7 @@ interface CreateServerBody {
   serverType?: string;
   location?: string;
   gameVersion?: string | null;
+  options?: FactorioMapOptions;
 }
 
 // I/O around the world plan: returns the new server and the DNS record name
@@ -148,6 +149,7 @@ export const createServer = async ({
   serverType,
   location,
   gameVersion,
+  options,
 }: CreateServerBody) => {
   try {
     const api = await getApi();
@@ -159,6 +161,7 @@ export const createServer = async ({
       location,
       snapshot,
       gameVersion,
+      options,
       servers,
       env: process.env,
     });

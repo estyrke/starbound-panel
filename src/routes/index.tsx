@@ -12,7 +12,13 @@ import type {
   DormantEntity,
   PendingEntity,
 } from "../lib/types.js";
-import { GAMES, gameIdOf, type GameId } from "../lib/games.js";
+import {
+  FACTORIO_PRESETS,
+  GAMES,
+  gameIdOf,
+  type FactorioMapOptions,
+  type GameId,
+} from "../lib/games.js";
 import { validateWorldName } from "../lib/helpers.js";
 import {
   sendAction,
@@ -221,17 +227,19 @@ function App() {
       game,
       serverType,
       location,
+      options,
     }: {
       name: string;
       game: GameId;
       serverType?: string;
       location?: string;
+      options?: FactorioMapOptions;
     }) => {
       addLog(`Startar ${name}…`);
       try {
         const res = await runStartFlow(
           { startServerInit, getServerStatus, updateDnsForServer },
-          { name, game, serverType, location },
+          { name, game, serverType, location, options },
           (phase) => setOp(name, phase, START_LABELS[phase], game)
         );
 
@@ -409,7 +417,7 @@ function App() {
                   key={`new-${g.id}`}
                   game={g.id}
                   takenNames={takenNames}
-                  onCreate={(name) => doStart({ name, game: g.id })}
+                  onCreate={(name, options) => doStart({ name, game: g.id, options })}
                 />
               )),
             ]
@@ -609,26 +617,30 @@ function PendingCard({ name, game, op }: PendingCardProps) {
 const NEW_WORLD_INFO: Record<GameId, string> = {
   starbound:
     "Startar en ny server och installerar Starbound via SteamCMD (kräver STEAM_USER + STEAM_PASS)",
-  factorio: "Startar en ny server med Factorio och standardkarta",
+  factorio: "Startar en ny server med Factorio och en ny karta enligt valen nedan",
 };
 
 interface NewWorldCardProps {
   game: GameId;
   takenNames: string[];
-  onCreate: (name: string) => void;
+  onCreate: (name: string, options?: FactorioMapOptions) => void;
 }
 
 function NewWorldCard({ game, takenNames, onCreate }: NewWorldCardProps) {
   const [name, setName] = useState("");
   const [touched, setTouched] = useState(false);
-  const error = validateWorldName(name, takenNames);
+  const [map, setMap] = useState<MapFormState>(EMPTY_MAP_FORM);
+  const nameError = validateWorldName(name, takenNames);
+  const mapError = game === "factorio" ? validateMapForm(map) : null;
+  const error = nameError ?? mapError;
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
     setTouched(true);
     if (error) return;
-    onCreate(name.trim());
+    onCreate(name.trim(), game === "factorio" ? toMapOptions(map) : undefined);
     setName("");
+    setMap(EMPTY_MAP_FORM);
     setTouched(false);
   };
 
@@ -654,12 +666,131 @@ function NewWorldCard({ game, takenNames, onCreate }: NewWorldCardProps) {
         onBlur={() => setTouched(name.length > 0)}
         autoComplete="off"
       />
-      {touched && error && <div className={styles.errorBanner}>⚠ {error}</div>}
+      {game === "factorio" && <MapGenFields value={map} onChange={setMap} />}
+      {(touched || (mapError && nameError === null)) && error && (
+        <div className={styles.errorBanner}>⚠ {error}</div>
+      )}
 
       <div className={styles.cardActions}>
         <ActionBtn label="NY VÄRLD" icon="◆" color="var(--accent)" disabled={!!error} wide />
       </div>
     </form>
+  );
+}
+
+interface MapFormState {
+  seed: string;
+  preset: string;
+  peaceful: boolean;
+  noEnemies: boolean;
+  mapGenSettingsJson: string;
+  mapSettingsJson: string;
+  spaceAge: boolean;
+}
+
+const EMPTY_MAP_FORM: MapFormState = {
+  seed: "",
+  preset: "",
+  peaceful: false,
+  noEnemies: false,
+  mapGenSettingsJson: "",
+  mapSettingsJson: "",
+  spaceAge: false,
+};
+
+function validateMapForm(m: MapFormState): string | null {
+  if (m.seed.trim() && !/^\d{1,10}$/.test(m.seed.trim())) return "Seed måste vara ett heltal";
+  for (const raw of [m.mapGenSettingsJson, m.mapSettingsJson]) {
+    if (!raw.trim()) continue;
+    try {
+      const v: unknown = JSON.parse(raw);
+      if (typeof v !== "object" || v === null || Array.isArray(v)) throw new Error();
+    } catch {
+      return "Rå JSON måste vara ett giltigt JSON-objekt";
+    }
+  }
+  return null;
+}
+
+function toMapOptions(m: MapFormState): FactorioMapOptions {
+  return { ...m, seed: m.seed.trim() };
+}
+
+function MapGenFields({
+  value,
+  onChange,
+}: {
+  value: MapFormState;
+  onChange: (v: MapFormState) => void;
+}) {
+  const set = <K extends keyof MapFormState>(k: K, v: MapFormState[K]) =>
+    onChange({ ...value, [k]: v });
+  return (
+    <>
+      <input
+        className={styles.loginInput}
+        type="text"
+        inputMode="numeric"
+        aria-label="Seed"
+        placeholder="SEED (TOM = SLUMP)"
+        value={value.seed}
+        onChange={(e) => set("seed", e.target.value)}
+        autoComplete="off"
+      />
+      <select
+        className={styles.loginInput}
+        aria-label="Förinställning"
+        value={value.preset}
+        onChange={(e) => set("preset", e.target.value)}
+      >
+        <option value="">FÖRINSTÄLLNING: STANDARD</option>
+        {FACTORIO_PRESETS.map((p) => (
+          <option key={p} value={p}>
+            {p}
+          </option>
+        ))}
+      </select>
+      <label>
+        <input
+          type="checkbox"
+          checked={value.peaceful}
+          onChange={(e) => set("peaceful", e.target.checked)}
+        />{" "}
+        Fredligt läge
+      </label>
+      <label>
+        <input
+          type="checkbox"
+          checked={value.noEnemies}
+          onChange={(e) => set("noEnemies", e.target.checked)}
+        />{" "}
+        Inga fiender
+      </label>
+      <label>
+        <input
+          type="checkbox"
+          checked={value.spaceAge}
+          onChange={(e) => set("spaceAge", e.target.checked)}
+        />{" "}
+        Space Age (kräver DLC hos alla spelare)
+      </label>
+      <textarea
+        className={styles.loginInput}
+        aria-label="Rå map-gen-settings (JSON)"
+        placeholder="MAP-GEN-SETTINGS JSON (ERSÄTTER VALEN OVAN)"
+        rows={3}
+        value={value.mapGenSettingsJson}
+        onChange={(e) => set("mapGenSettingsJson", e.target.value)}
+      />
+      <textarea
+        className={styles.loginInput}
+        aria-label="Rå map-settings (JSON)"
+        placeholder="MAP-SETTINGS JSON (ERSÄTTER VALEN OVAN)"
+        rows={3}
+        value={value.mapSettingsJson}
+        onChange={(e) => set("mapSettingsJson", e.target.value)}
+      />
+    </>
   );
 }
 

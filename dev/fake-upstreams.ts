@@ -11,6 +11,8 @@ export interface FakeUpstreamsOptions {
   port?: number;
   // Mounted at /hetzner when given (see emulator/hetzner-emulator.ts).
   hetzner?: FakeRouter;
+  // Version the fake factorio.com reports as the latest stable release.
+  factorioVersion?: string;
   log?: (line: string) => void;
 }
 
@@ -25,9 +27,10 @@ export interface RunningFakeUpstreams {
 export async function startFakeUpstreams({
   port = 0,
   hetzner,
+  factorioVersion,
   log = console.log,
 }: FakeUpstreamsOptions = {}): Promise<RunningFakeUpstreams> {
-  const mounts: [string, FakeRouter][] = [["/factorio", createFakeFactorio()]];
+  const mounts: [string, FakeRouter][] = [["/factorio", createFakeFactorio(factorioVersion)]];
   if (hetzner) mounts.push(["/hetzner", hetzner]);
 
   const server = createServer(async (req, res) => {

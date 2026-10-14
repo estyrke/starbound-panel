@@ -214,13 +214,15 @@ describe.skipIf(problem)(`hetzner emulator (${problem ?? "docker ok"})`, () => {
     };
     const saveAndStop = async (id: number) => {
       const shutdown = await sendAction({ action: "shutdown", id });
-      expect(shutdown.body.action.status).toBe("success");
-      expect((await getAction(shutdown.body.action.id)).status).toBe("success");
+      const actionId = (shutdown.body as { action: { id: number; status: string } }).action;
+      expect(actionId.status).toBe("success");
+      expect((await getAction(actionId.id)).status).toBe("success");
       expect((await getServer(id))?.status).toBe("off");
       const snap = await takeSnapshot(id);
-      expect(snap.image.type).toBe("snapshot");
+      const image = snap.image!;
+      expect(image.type).toBe("snapshot");
       expect((await deleteServer(id)).success).toBe(true);
-      return snap.image.id;
+      return image.id;
     };
 
     // 1. fresh world with some progress

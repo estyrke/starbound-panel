@@ -1,7 +1,7 @@
 import type { DnsProvider, UpdateDnsBody, UpdateDnsResult } from "./dns.server";
 
 const GANDI_API = "https://api.gandi.net/v5/livedns";
-// Overridable so `pnpm dev:fake` can point the panel at the local fake upstreams.
+// Overridable so `pnpm dev:local` can point the panel at the local upstreams.
 const gandiApiUrl = () => process.env.GANDI_API_URL ?? GANDI_API;
 
 async function putRecord(

@@ -1,7 +1,7 @@
 // Resolves the latest stable headless Factorio version from factorio.com.
 
 const LATEST_RELEASES_URL = "https://factorio.com/api/latest-releases";
-// Overridable so `pnpm dev:fake` can point the panel at the local fake upstreams.
+// Overridable so `pnpm dev:local` can point the panel at the local upstreams.
 const latestReleasesUrl = () => process.env.FACTORIO_API_URL ?? LATEST_RELEASES_URL;
 
 // Extracts stable.headless from the latest-releases response, or null if the

@@ -14,5 +14,8 @@ export interface FakeResponse {
   body?: unknown;
 }
 
-// A router returns undefined when it has no route for the request.
-export type FakeRouter = (req: FakeRequest) => FakeResponse | undefined;
+// A router returns undefined when it has no route for the request. It may be
+// async (the Hetzner emulator talks to Docker).
+export type FakeRouter = (
+  req: FakeRequest
+) => FakeResponse | undefined | Promise<FakeResponse | undefined>;

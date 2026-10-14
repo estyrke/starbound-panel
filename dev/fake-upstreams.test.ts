@@ -8,14 +8,14 @@ import { startFakeUpstreams, type RunningFakeUpstreams } from "./fake-upstreams"
 let fake: RunningFakeUpstreams;
 
 beforeAll(async () => {
-  fake = await startFakeUpstreams({ log: () => {} });
+  fake = await startFakeUpstreams({ log: () => {}, factorioVersion: "2.0.12" });
   Object.assign(process.env, fake.env);
 });
 
 afterAll(() => fake.close());
 
 describe("fake upstreams", () => {
-  it("serves the latest Factorio version", async () => {
-    expect(await getLatestFactorioVersion()).toMatch(/^\d+\.\d+\.\d+$/);
+  it("serves the configured latest Factorio version", async () => {
+    expect(await getLatestFactorioVersion()).toBe("2.0.12");
   });
 });

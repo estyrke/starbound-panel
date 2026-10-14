@@ -121,7 +121,7 @@ pnpm local:image   # bygg basavbilden (en gång, se nedan)
 pnpm dev:local     # panel på http://localhost:3000, lösenord: local
 ```
 
-Kommandot kontrollerar att Docker svarar och att basavbilden finns (annars skrivs ett tydligt felmeddelande, t.ex. att du ska köra `pnpm local:image`), startar en **Hetzner-emulator** på port 4010 (`LOCAL_UPSTREAMS_PORT`) och startar dev-servern med engångsvärden för `HETZNER_API_TOKEN`, `PANEL_PASSWORD` och `SESSION_SECRET` samt `DNS_PROVIDER=none`. Riktiga nycklar i `.env` kan därför aldrig användas av misstag. `STEAM_USER` / `STEAM_PASS` tas från din miljö (krävs för en ny Starbound-värld). `FACTORIO_API_URL` lämnas osatt, så panelen frågar riktiga factorio.com.
+Kommandot kontrollerar att Docker svarar och att basavbilden finns (annars skrivs ett tydligt felmeddelande, t.ex. att du ska köra `pnpm local:image`), startar en **Hetzner-emulator** på port 4010 (`LOCAL_UPSTREAMS_PORT`) och startar dev-servern med engångsvärden för `HETZNER_API_TOKEN`, `PANEL_PASSWORD` och `SESSION_SECRET` samt `DNS_PROVIDER=none`. Riktiga nycklar i `.env` kan därför aldrig användas av misstag. `STEAM_USER` / `STEAM_PASS` tas från din miljö (krävs för en ny Starbound-värld). `FACTORIO_API_URL` lämnas osatt, så panelen frågar riktiga factorio.com (se `LOCAL_FACTORIO_VERSION` nedan).
 
 Emulatorn (`dev/emulator/`) talar den del av Hetzner Cloud API:t som panelen använder och kör varje server som en riktig Docker-container från basavbilden:
 
@@ -135,7 +135,19 @@ Emulatorn (`dev/emulator/`) talar den del av Hetzner Cloud API:t som panelen anv
 
 `pnpm test` kör också en kontrakttest av emulatorn mot panelens riktiga Hetzner-klient. Den hoppas över när Docker eller basavbilden saknas.
 
-Panelen läser bas-URL:erna från `HETZNER_API_URL`, `GANDI_API_URL` och `FACTORIO_API_URL`; utan dem används de riktiga tjänsterna. Den fejkade factorio.com-servern (`dev/fake-factorio.ts`) används ännu inte av `dev:local`.
+Panelen läser bas-URL:erna från `HETZNER_API_URL`, `GANDI_API_URL` och `FACTORIO_API_URL`; utan dem används de riktiga tjänsterna.
+
+#### Fäst Factorios "senaste" version (`LOCAL_FACTORIO_VERSION`)
+
+Med `LOCAL_FACTORIO_VERSION=x.y.z` monterar `dev:local` den fejkade factorio.com-servern (`dev/fake-factorio.ts`) och pekar panelen på den via `FACTORIO_API_URL`, så att x.y.z räknas som senaste stabila version. Själva spelet hämtas fortfarande från riktiga factorio.com, så versionen måste finnas som riktig release. Utan variabeln används riktiga factorio.com.
+
+Testa en uppgradering (#11):
+
+```bash
+LOCAL_FACTORIO_VERSION=2.0.55 pnpm dev:local   # skapa en Factorio-värld: etiketten factorio-version blir 2.0.55
+# starta om utan variabeln: den riktiga senaste versionen räknas nu som ny
+pnpm dev:local
+```
 
 ### Basavbild för lokala speldockrar (Docker / OrbStack)
 

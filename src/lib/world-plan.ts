@@ -22,7 +22,6 @@ export interface WorldPlanInput {
   // Resolved concrete game version for a fresh install of a versioned game;
   // null/absent means it couldn't be resolved.
   gameVersion?: string | null;
-  // Live servers; labels decide which game each one occupies.
   // Map-gen choices for a fresh Factorio world.
   options?: FactorioMapOptions;
   // Live servers; labels decide which game each one occupies.

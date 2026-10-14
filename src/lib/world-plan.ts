@@ -1,7 +1,15 @@
 // Pure builder turning a game, a world and the current servers into either a
 // refusal or a plan. The server functions only do I/O around the plan.
 
-import { GAMES, gameIdOf, type Env, type FirewallPort, type GameId } from "./games";
+import {
+  FACTORIO_PRESETS,
+  GAMES,
+  gameIdOf,
+  type Env,
+  type FactorioMapOptions,
+  type FirewallPort,
+  type GameId,
+} from "./games";
 
 export interface WorldPlanInput {
   game: GameId;
@@ -14,6 +22,8 @@ export interface WorldPlanInput {
   // null/absent means it couldn't be resolved.
   gameVersion?: string | null;
   // Live servers; labels decide which game each one occupies.
+  // Map-gen choices for a fresh Factorio world.
+  options?: FactorioMapOptions;
   servers: { name: string; labels?: Record<string, string> }[];
   env: Env;
 }
@@ -33,6 +43,25 @@ export interface WorldPlan {
 }
 
 export type WorldPlanResult = { ok: true; plan: WorldPlan } | { ok: false; error: string };
+
+// Seed and preset end up on a shell command line, so only known shapes pass;
+// raw JSON must parse before anything is created.
+function validateOptions(o: FactorioMapOptions): string | null {
+  if (o.seed && !/^\d{1,10}$/.test(o.seed)) return "Seed must be a whole number";
+  if (o.preset && !(FACTORIO_PRESETS as readonly string[]).includes(o.preset)) {
+    return `Unknown map preset "${o.preset}"`;
+  }
+  for (const raw of [o.mapGenSettingsJson, o.mapSettingsJson]) {
+    if (!raw?.trim()) continue;
+    try {
+      const v: unknown = JSON.parse(raw);
+      if (typeof v !== "object" || v === null || Array.isArray(v)) throw new Error();
+    } catch {
+      return "Raw map settings must be a valid JSON object";
+    }
+  }
+  return null;
+}
 
 export function buildWorldPlan(input: WorldPlanInput): WorldPlanResult {
   const game = GAMES[input.game];
@@ -73,7 +102,9 @@ export function buildWorldPlan(input: WorldPlanInput): WorldPlanResult {
         error: `Could not resolve the latest ${game.label} version, so a new world can't be created`,
       };
     }
-    const ud = game.userData(env, input.gameVersion ?? undefined);
+    const optionsError = input.options && validateOptions(input.options);
+    if (optionsError) return { ok: false, error: optionsError };
+    const ud = game.userData(env, input.gameVersion ?? undefined, input.options);
     if (!ud.ok) return { ok: false, error: ud.error };
     request.user_data = ud.userData;
   }

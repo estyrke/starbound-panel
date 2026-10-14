@@ -149,4 +149,84 @@ describe("buildWorldPlan for Factorio", () => {
     expect(r.plan.request.user_data).toBeUndefined();
     expect(r.plan.request.labels["factorio-version"]).toBe("2.0.70");
   });
+
+  describe("map-gen options", () => {
+    const plan = (options: Record<string, unknown>) =>
+      buildWorldPlan({ ...fbase, name: "f1", options });
+    const udOf = (options: Record<string, unknown>) => {
+      const r = plan(options);
+      if (!r.ok) throw new Error(r.error);
+      return r.plan.request.user_data ?? "";
+    };
+
+    it("passes the seed and preset to the map creation", () => {
+      const ud = udOf({ seed: "12345", preset: "death-world" });
+      expect(ud).toMatch(/--create \S+ .*--map-gen-seed 12345/);
+      expect(ud).toMatch(/--create \S+ .*--preset death-world/);
+    });
+
+    it("omits seed and preset when left empty", () => {
+      const ud = udOf({ seed: "", preset: "" });
+      expect(ud).not.toContain("--map-gen-seed");
+      expect(ud).not.toContain("--preset");
+    });
+
+    it("refuses a seed that isn't a number or a preset that doesn't exist", () => {
+      expect(plan({ seed: "1; rm -rf /" }).ok).toBe(false);
+      expect(plan({ preset: "nope" }).ok).toBe(false);
+    });
+
+    // The JSON a heredoc named `name` writes, parsed.
+    const fileOf = (ud: string, name: string) => {
+      const m = ud.match(new RegExp(`cat > \\S*${name} << 'JSON'\\n([\\s\\S]*?)\\nJSON\\n`));
+      return m ? JSON.parse(m[1]) : undefined;
+    };
+
+    it("writes peaceful mode into the generated map-gen settings", () => {
+      const ud = udOf({ peaceful: true });
+      expect(fileOf(ud, "map-gen-settings.json")).toMatchObject({ peaceful_mode: true });
+      expect(ud).toContain("--map-gen-settings /opt/factorio/map-gen-settings.json");
+    });
+
+    it("removes enemies in both settings files for no-enemies", () => {
+      const ud = udOf({ noEnemies: true });
+      expect(fileOf(ud, "map-gen-settings.json").autoplace_controls["enemy-base"].size).toBe(0);
+      expect(fileOf(ud, "map-settings.json").enemy_expansion.enabled).toBe(false);
+      expect(ud).toContain("--map-settings /opt/factorio/map-settings.json");
+    });
+
+    it("passes no settings files for a plain map", () => {
+      const ud = udOf({});
+      expect(ud).not.toContain("--map-gen-settings");
+      expect(ud).not.toContain("--map-settings");
+    });
+
+    it("lets raw JSON win over the form fields", () => {
+      const ud = udOf({
+        peaceful: true,
+        noEnemies: true,
+        preset: "island",
+        mapGenSettingsJson: '{ "width": 500 }',
+        mapSettingsJson: '{"pollution":{"enabled":false}}',
+      });
+      expect(fileOf(ud, "map-gen-settings.json")).toEqual({ width: 500 });
+      expect(fileOf(ud, "map-settings.json")).toEqual({ pollution: { enabled: false } });
+      expect(ud).not.toContain("--preset");
+    });
+
+    it("refuses raw JSON that isn't a valid object", () => {
+      expect(plan({ mapGenSettingsJson: "{nope" }).ok).toBe(false);
+      expect(plan({ mapSettingsJson: "[1]" }).ok).toBe(false);
+    });
+
+    it("keeps Space Age off unless ticked", () => {
+      const enabled = (ud: string, mod: string) =>
+        fileOf(ud, "mod-list.json").mods.find((m: { name: string }) => m.name === mod).enabled;
+      expect(enabled(udOf({}), "space-age")).toBe(false);
+      expect(enabled(udOf({ spaceAge: false }), "space-age")).toBe(false);
+      for (const mod of ["space-age", "quality", "elevated-rails"]) {
+        expect(enabled(udOf({ spaceAge: true }), mod)).toBe(true);
+      }
+    });
+  });
 });

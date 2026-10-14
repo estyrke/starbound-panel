@@ -2,7 +2,7 @@
 // a short server-function round trip, so no single HTTP request has to outlive
 // a serverless function timeout. Dependencies are injected for testability.
 
-import type { GameId } from "./games";
+import type { FactorioMapOptions, GameId } from "./games";
 
 export type StartPhase = "creating" | "waiting-running" | "dns";
 export type StopPhase = "shutting-down" | "waiting-off" | "snapshotting" | "deleting";
@@ -30,10 +30,17 @@ interface ServerStatus {
   status: string;
 }
 
+export interface StartParams {
+  name: string;
+  game?: GameId;
+  serverType?: string;
+  location?: string;
+  // Map-gen choices; only used when a fresh Factorio world is created.
+  options?: FactorioMapOptions;
+}
+
 export interface StartFlowDeps {
-  startServerInit: (args: {
-    data: { name: string; game?: GameId; serverType?: string; location?: string };
-  }) => Promise<{ serverId: number }>;
+  startServerInit: (args: { data: StartParams }) => Promise<{ serverId: number }>;
   getServerStatus: (args: { data: { serverId: number } }) => Promise<ServerStatus | null>;
   updateDnsForServer: (args: {
     data: { serverId: number };
@@ -48,7 +55,7 @@ export interface StartFlowResult {
 
 export async function runStartFlow(
   deps: StartFlowDeps,
-  params: { name: string; game?: GameId; serverType?: string; location?: string },
+  params: StartParams,
   onPhase: (phase: StartPhase) => void,
   pollOptions?: PollOptions
 ): Promise<StartFlowResult> {

@@ -131,7 +131,10 @@ Emulatorn (`dev/emulator/`) talar den del av Hetzner Cloud API:t som panelen anv
 - **Portar**: varje TCP/UDP-regel utom SSH i den brandvägg som skickas med skapa-anropet publiceras på samma port på `localhost`. Anslut spelklienten till `localhost` (Factorio: UDP 34197).
 - Servertyp och plats lagras och ekas tillbaka, men ger inga CPU- eller minnesgränser.
 
-Ännu inte med (kommer i nästa steg av spec #19): serveråtgärder (avstängning, omstart), snapshots och återställning.
+- **Serveråtgärder**: `shutdown` skickar systemds stoppsignal (SIGRTMIN+3) med 300 s timeout så att spelet hinner skriva sin sparfil, `poweroff` dödar containern, `poweron` startar den och `reboot` startar om den (`user_data` körs inte om). Docker-anrop körs synkront, så åtgärder returneras redan färdiga.
+- **Snapshots**: "skapa avbild" gör `docker commit` av containern till avbilden `sbp-snapshot:<id>` med snapshot-labels. Listning stöder `type=snapshot`, `label_selector` (även förkodade värden), `sort=created:desc` och `per_page`. Att radera en avbild tar bort taggen, vilket gör att `SNAPSHOT_RETENTION_COUNT` fungerar.
+- **Återställning**: att skapa en server från ett snapshot-id startar en container från den avbilden. Medföljande `user_data` hamnar i en ny NoCloud-seed med nytt instance-id, så den körs igen (Factorio-uppgraderingen beror på det).
+- **Lagerbegränsning**: varje save & stop commitar ovanpå förra avbilden, så lagren staplas. Docker tillåter ungefär 125 lager; om du når gränsen (skapa/commit misslyckas) – starta en ny värld.
 
 `pnpm test` kör också en kontrakttest av emulatorn mot panelens riktiga Hetzner-klient. Den hoppas över när Docker eller basavbilden saknas.
 
